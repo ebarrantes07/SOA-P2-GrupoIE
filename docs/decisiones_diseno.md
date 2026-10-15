@@ -161,7 +161,7 @@ operación"*:
 | 7 | `sync_destroy_primitives` + `munmap` + `shm_unlink`. |
 | Después de 8 | Nada: la instancia quedó publicada y el `creator` retorna éxito. |
 
-Dos consecuencias que vale la pena tener claras para la defensa:
+Dos consecuencias que vale la pena tener claras:
 
 - Como `magic` se escribe solo si todos los pasos anteriores salieron
   bien, **una creación abortada no puede dejar un segmento que *parezca*
@@ -248,7 +248,7 @@ datos grandes. Se descartó porque:
   original.
 
 FNV-1a se escribe en ~5 líneas, sin dependencias, y es trivial de explicar
-y trazar a mano en la defensa.
+y trazar a mano.
 
 ---
 
