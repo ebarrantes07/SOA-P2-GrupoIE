@@ -202,3 +202,52 @@ datos grandes. Se descartó porque:
 
 FNV-1a se escribe en ~5 líneas, sin dependencias, y es trivial de explicar
 y trazar a mano en la defensa.
+
+---
+
+## D2 — Buffer circular puro (`include/buffer.h`)
+
+- **Fecha:** 2026-10-14
+- **Issue:** [#2](../../issues/2) (Diseño A), slice 2
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+El buffer en sí todavía no necesita sincronización — eso es el slice 3
+(D3). Esta entrada solo fija cómo se mueven `head`/`tail`/`count` sobre
+`messages[]`, el arreglo de tamaño fijo definido en D1.
+
+### Ajuste de alcance respecto al plan original
+
+`buffer.h` necesita los `struct` de D1 para poder declarar sus funciones,
+así que se adelantó la creación de `include/memory.h` (exactamente las
+structs de D1, sin lógica nueva) a este slice. El slice 3 queda entonces
+solo con `include/sync.h` y el pseudocódigo de `put`/`get`.
+
+### Decisión
+
+```c
+bool buffer_is_full(const struct instance *inst);
+bool buffer_is_empty(const struct instance *inst);
+void buffer_push(struct instance *inst, const struct message *msg);
+void buffer_pop(struct instance *inst, struct message *out);
+```
+
+- **Avance de índices:** `tail = (tail + 1) % capacity` al insertar,
+  `head = (head + 1) % capacity` al extraer. Se usa `%` normal, no una
+  máscara de bits (`& (capacity - 1)`), porque `capacity` acepta cualquier
+  valor entre 1 y 1024 — no se exige que sea potencia de 2 — y el costo de
+  una división entera de más no compite ni de cerca con el costo real del
+  sistema (adquirir el mutex, despertar a un proceso dormido).
+- **No son thread-safe por sí mismas.** No toman el mutex ni verifican
+  nada más allá de lo que dice su precondición documentada. Quien las
+  llama (la capa de sincronización, D3) ya debe tener el mutex tomado y
+  ya debe haber confirmado `!buffer_is_full`/`!buffer_is_empty` — típicamente
+  dentro del ciclo `while` de un `pthread_cond_wait`.
+- **No asignan `enqueue_seq`, `dequeue_seq` ni `enqueue_time_ns`.**
+  `buffer_push` recibe un `struct message` ya completo y solo lo copia a
+  la casilla; esos tres campos los llena quien llama, porque asignarlos
+  correctamente (sin saltos ni duplicados) exige estar bajo el mutex en el
+  momento exacto de la operación — mezclarlo dentro del buffer forzaría a
+  este módulo a conocer de sincronización, justo la separación que D1 (y
+  el enunciado) pide mantener explícita.
