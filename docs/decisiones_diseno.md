@@ -1,0 +1,204 @@
+# Decisiones de diseño
+
+Bitácora viva de decisiones de diseño del Proyecto 2 (MC6004 SOA). Cada
+entrada queda numerada (D1, D2…) y no se borra aunque una decisión posterior
+la reemplace — en ese caso la entrada nueva dice explícitamente a cuál
+reemplaza y por qué. El objetivo es que cualquiera (incluido el profesor)
+pueda reconstruir por qué el código quedó como quedó sin tener que preguntar.
+
+---
+
+## D1 — Layout del segmento de memoria compartida
+
+- **Fecha:** 2026-10-14
+- **Issue:** [#2](../../issues/2) (Diseño A), slice 1
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+El enunciado fija varias restricciones sobre qué puede vivir en el segmento
+compartido y cómo:
+
+- *"La representación compartida utilizará valores, índices o
+  desplazamientos; no dependerá de que una dirección virtual obtenida en un
+  proceso sea válida en otro."* → nada de punteros dentro del segmento.
+- *"Los mensajes tendrán tamaño fijo y no contendrán punteros a memoria
+  privada."*
+- Tabla "Campo mínimo" del mensaje: `producer_id` y `sequence`,
+  `enqueue_seq`, `enqueue_time_ns`, `payload` (tamaño fijo, contenido
+  verificable, definido por el grupo).
+- *"La creación deberá ser exclusiva y la publicación de una instancia lista
+  no podrá exponer estructuras parcialmente inicializadas."*
+- *"Se permiten semáforos POSIX o mutex y variables de condición POSIX
+  configurados para compartirse entre procesos (...) Separar
+  conceptualmente exclusión del estado, disponibilidad de mensajes y
+  disponibilidad de espacio."*
+- *"El finalizador (...) garantiza que no quedan usuarios ni esperas sobre
+  las primitivas antes de destruirlas."* → hace falta un contador de
+  participantes activos.
+
+### Decisión
+
+Un único `struct instance`, inicializado por `creator` dentro del segmento
+`mmap`, con el arreglo de mensajes como miembro flexible al final. Los
+identificadores del código van en inglés; los comentarios, en español:
+
+```c
+#include <stdatomic.h>
+#include <stdint.h>
+#include <pthread.h>
+
+#define INSTANCE_MAGIC      0xDEADBEEFu   /* arbitrario, != 0, fácil de ver en un hexdump/gdb */
+#define INSTANCE_VERSION    1u
+#define PAYLOAD_FILL_SIZE   16             /* ver sección "Payload" abajo */
+
+enum instance_state { STATE_OPEN = 0, STATE_CLOSING = 1, STATE_CLOSED = 2 };
+
+/* Campos ordenados de mayor a menor alineación (8, 4, 1 bytes) a propósito:
+ * así sizeof(struct payload) da 32 sin relleno invisible del compilador.
+ * Ver "Payload: metadata + checksum" más abajo. */
+struct payload {
+    uint64_t sequence;                    /* copia: ver "redundancia deliberada" */
+    uint32_t producer_id;                 /* copia: ver "redundancia deliberada" */
+    uint32_t checksum;                    /* FNV-1a de 32 bits sobre los campos de abajo */
+    uint8_t  fill[PAYLOAD_FILL_SIZE];     /* fill[i] = (producer_id + sequence + i) % 256 */
+};                                         /* sizeof == 32 bytes, sin relleno del compilador */
+
+struct message {
+    uint32_t         producer_id;
+    uint64_t         sequence;             /* por productor */
+    uint64_t         enqueue_seq;          /* global, asignado bajo protección, empieza en 1 */
+    uint64_t         enqueue_time_ns;      /* CLOCK_MONOTONIC, capturado bajo protección */
+    struct payload   payload;
+};
+
+struct instance {
+    _Atomic uint32_t magic;        /* se escribe último, ver "Publicación segura" */
+    uint32_t         version;
+    uint32_t         capacity;     /* 1..1024, fija toda la vida de la instancia */
+    int              state;        /* enum instance_state */
+
+    pthread_mutex_t  mutex;        /* PTHREAD_PROCESS_SHARED */
+    pthread_cond_t   not_full;     /* disponibilidad de espacio */
+    pthread_cond_t   not_empty;    /* disponibilidad de mensajes */
+    pthread_cond_t   all_left;     /* para que el finisher espere activos == 0 */
+
+    uint32_t  head, tail, count;
+    uint64_t  enqueue_seq, dequeue_seq;
+
+    uint32_t  active_producers, active_consumers;
+
+    /* tabla de ids usados por rol (unicidad de por vida): se agrega en #12 */
+
+    struct message messages[];     /* capacity * sizeof(struct message), al final */
+};
+```
+
+`creator` dimensiona el segmento con
+`ftruncate(fd, sizeof(struct instance) + capacity * sizeof(struct message))`.
+
+### Publicación segura (evitar exponer estado parcial)
+
+`magic` es un entero atómico (`_Atomic uint32_t`), no uno normal. `creator`
+inicializa todo el resto de la estructura primero (mutex, condvars,
+contadores en 0, `capacity`, `version`) y al final hace:
+
+```c
+atomic_store_explicit(&inst->magic, INSTANCE_MAGIC, memory_order_release);
+```
+
+Cualquier otro proceso, al hacer `attach`, valida con:
+
+```c
+if (atomic_load_explicit(&inst->magic, memory_order_acquire) != INSTANCE_MAGIC) {
+    /* instancia inexistente o aún no lista: error claro, sin reintento silencioso */
+}
+```
+
+El par `release`/`acquire` es necesario porque el orden en que un proceso
+escribe campos no está garantizado que se observe en ese mismo orden desde
+otro núcleo/proceso sin una sincronización explícita. Si el segundo proceso
+observa el `magic` escrito por el primero, el modelo de memoria de C
+garantiza que también observa todo lo que el primero escribió *antes* de
+ese `store`. Sin este par, en teoría un proceso podría ver `magic` ya
+puesto y aun así leer `capacity` o `head` todavía en cero.
+
+No se eligió un mutex para proteger la publicación inicial porque un
+proceso que recién llega no puede confiar en que el mutex ya esté
+inicializado — sería circular (necesitaría el mutex para saber si el mutex
+existe).
+
+### Payload: metadata + checksum
+
+Contenido elegido para que sea "verificable" (exigencia explícita del
+enunciado) sin que el verificador necesite guardar nada aparte del propio
+CSV:
+
+1. `producer_id` y `sequence` copiados dentro del payload — permite
+   comparar "lo que dice el sobre del mensaje" contra "lo que dice el
+   payload" como chequeo cruzado independiente.
+2. `fill[16]` determinista: `fill[i] = (producer_id + sequence + i) %
+   256`. El verificador lo puede recalcular solo con `producer_id` y
+   `sequence`.
+3. `checksum`: FNV-1a de 32 bits sobre los bytes lógicos de `sequence` (8)
+   + `producer_id` (4) + `fill` (16) = 28 bytes de entrada, **serializados
+   campo por campo explícitamente** — nunca haciendo un hash directo sobre
+   `&payload`/`sizeof(payload)`, para no depender de cómo decida alinear
+   los campos el compilador (ver nota de alineación en el bloque de
+   código). En el orden de los campos de la máquina local; la ejecución es
+   de un solo host, así que no hace falta normalizar endianness.
+
+   Constantes FNV-1a de 32 bits: offset basis `0x811c9dc5`, primo
+   `0x01000193`. Por cada byte: `hash ^= byte; hash *= primo;`.
+
+Esto responde directamente a *"detectará (...) contenido alterado"* del
+enunciado: sin checksum, el verificador solo puede notar mensajes de más o
+de menos, no un mensaje con bytes cambiados.
+
+**Tamaño final del payload: 32 bytes** (`8 + 4 + 4 + 16`, sin relleno del
+compilador gracias al orden de los campos).
+
+### Por qué FNV-1a y no otro método de checksum
+
+El checksum existe para un escenario concreto: si un bug de concurrencia
+nuestro (un `put`/`get` mal protegido, un índice calculado mal, una
+lectura de memoria que no terminó de escribirse) deja un mensaje con
+`fill` corrupto pero `producer_id`/`sequence` intactos, el chequeo cruzado
+del punto 1 (comparar sobre contra payload) no lo detecta — ambos siguen
+coincidiendo. Hace falta algo que dependa de *todo* el contenido del
+payload, incluido `fill`.
+
+Se compararon cuatro opciones:
+
+| Método | Por qué se descartó / se eligió |
+|---|---|
+| **Suma o XOR de bytes** | Demasiado débil incluso para nuestro caso: ambas operaciones son conmutativas, así que si un bug intercambia dos bytes de posición (plausible en un error de indexación), el checksum da exactamente igual y la corrupción pasa invisible. No sirve para el propósito. |
+| **CRC32** | Diseñado específicamente para canales de transmisión ruidosos: garantiza matemáticamente detectar todo error de un solo bit y ráfagas de error hasta cierto largo. Esas garantías responden a un modelo de falla que no es el nuestro — no hay cable ni radio entre productor y consumidor, solo memoria compartida en la misma máquina. Lo que puede fallar ahí es un bug de software (un `memcpy` a la casilla equivocada, una condición de carrera), que típicamente sobrescribe bytes enteros con otro contenido completamente distinto, no voltea un bit aislado. Para ese tipo de corrupción, las garantías extra de CRC32 no aportan nada sobre un hash genérico, y su implementación (tabla de 256 entradas) es más código para el mismo resultado práctico. |
+| **FNV-1a** *(elegido)* | Hash genérico de propósito general: cualquier cambio en los 28 bytes de entrada cambia el resultado con probabilidad ~(1 − 1/2³²) ≈ 99.99999998%, que es la misma fuerza de detección que ofrece CRC32 para corrupción arbitraria (no de bit único). Algoritmo público, documentado, sin ambigüedad de versión, ~5 líneas sin tabla ni dependencias. |
+| **XXH3** | Ver comparación completa abajo — mejor en teoría, pero sus ventajas no aplican a 28 bytes y trae una dependencia externa que requiere aprobación previa del profesor. |
+
+En otras palabras: no necesitamos las garantías específicas de CRC32
+contra errores de transmisión porque no hay transmisión — hay bugs de
+software, y contra esos, la probabilidad de colisión de un hash de 32
+bits ya es suficiente, sea cual sea el algoritmo.
+
+### Alternativa descartada: XXH3 en vez de FNV-1a
+
+Se consideró XXH3 (familia xxHash) por su mejor distribución y velocidad en
+datos grandes. Se descartó porque:
+
+- El enunciado permite "C estándar y POSIX; otra dependencia requiere
+  aprobación previa" — XXH3 es una librería externa y el proyecto pide
+  documentar procedencia y licencia de material reutilizado en la entrega.
+  Para una pieza que es un detalle de verificación, no vale el costo de
+  pedir esa aprobación con 3 semanas de plazo.
+- Su ventaja de velocidad aparece procesando megabytes; sobre 28 bytes de
+  entrada la diferencia frente a FNV-1a es, en la práctica, cero.
+- Reimplementarla a mano para evitar la dependencia tampoco se justifica:
+  la referencia real usa tablas de constantes y rutas distintas por rango
+  de tamaño de entrada, es fácil de implementar "casi bien" pero no
+  bit-compatible, y perdería la ventaja de usar la implementación afinada
+  original.
+
+FNV-1a se escribe en ~5 líneas, sin dependencias, y es trivial de explicar
+y trazar a mano en la defensa.
