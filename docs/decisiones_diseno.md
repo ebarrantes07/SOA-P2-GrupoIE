@@ -251,3 +251,164 @@ void buffer_pop(struct instance *inst, struct message *out);
   momento exacto de la operación — mezclarlo dentro del buffer forzaría a
   este módulo a conocer de sincronización, justo la separación que D1 (y
   el enunciado) pide mantener explícita.
+
+---
+
+## D3 — Protocolo de sincronización: `put` / `get` (`include/sync.h`)
+
+- **Fecha:** 2026-10-15
+- **Issue:** [#2](../../issues/2) (Diseño A), slice 3
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+Es la capa que traduce a código las tres exigencias centrales del
+enunciado sobre sincronización: separar exclusión de disponibilidad de
+datos y de espacio; bloquear en vez de sondear; y no retener el bloqueo
+que necesita quien puede satisfacer la espera.
+
+`sync.h` es el **único** módulo que toca el mutex y las condvars.
+`buffer.h` (D2) asume que ya están tomados; los módulos de participantes
+(#12) y finisher (#16/#17) construyen sus operaciones protegidas sobre
+`sync_lock`/`sync_unlock`.
+
+### Pseudocódigo
+
+```c
+enum put_result sync_put(struct instance *inst, struct message *msg,
+                         struct op_snapshot *snap)
+{
+    lock(&inst->mutex);
+
+    while (buffer_is_full(inst) && inst->state == STATE_OPEN)
+        cond_wait(&inst->not_full, &inst->mutex);
+
+    if (inst->state != STATE_OPEN) {          /* el corte le gana al espacio */
+        unlock(&inst->mutex);
+        return PUT_REJECTED_CLOSING;           /* NO cuenta como aceptado */
+    }
+
+    msg->enqueue_seq     = ++inst->enqueue_seq;   /* primer mensaje -> 1 */
+    msg->enqueue_time_ns = now_monotonic_ns();
+    buffer_push(inst, msg);                       /* <-- toma efecto aqui */
+
+    if (snap) {
+        snap->seq       = msg->enqueue_seq;
+        snap->time_ns   = msg->enqueue_time_ns;
+        snap->occupancy = inst->count;
+    }
+
+    cond_signal(&inst->not_empty);
+    unlock(&inst->mutex);
+    return PUT_OK;
+}
+
+enum get_result sync_get(struct instance *inst, struct message *out,
+                         struct op_snapshot *snap)
+{
+    lock(&inst->mutex);
+
+    while (buffer_is_empty(inst) && inst->state == STATE_OPEN)
+        cond_wait(&inst->not_empty, &inst->mutex);
+
+    if (buffer_is_empty(inst)) {              /* implica state != OPEN */
+        unlock(&inst->mutex);
+        return GET_DRAINED;
+    }
+
+    uint64_t dseq = ++inst->dequeue_seq;
+    buffer_pop(inst, out);                     /* <-- toma efecto aqui */
+
+    if (snap) {
+        snap->seq       = dseq;
+        snap->time_ns   = now_monotonic_ns();
+        snap->occupancy = inst->count;
+    }
+
+    cond_signal(&inst->not_full);
+    unlock(&inst->mutex);
+    return GET_OK;
+}
+```
+
+### Predicados de espera, y por qué son asimétricos
+
+| | Duerme mientras | Al salir del ciclo verifica |
+|---|---|---|
+| Productor | `count == capacity && state == OPEN` | `state != OPEN` → rechazado |
+| Consumidor | `count == 0 && state == OPEN` | `count == 0` → drenado |
+
+El productor sale apenas el estado deja de ser OPEN, aunque haya espacio
+libre: *"una inserción concurrente queda aceptada antes de ese punto o
+rechazada después"*. El chequeo de estado le gana al de espacio.
+
+El consumidor hace lo contrario: sigue extrayendo en CLOSING mientras
+queden mensajes, porque *"los consumidores permanecen hasta extraer todos
+los mensajes aceptados"*.
+
+Detalle fino: el consumidor verifica **solo** `count == 0`, sin mirar el
+estado, y eso alcanza — si salió del ciclo con el buffer vacío, la única
+forma posible es que el estado ya no sea OPEN (si fuera OPEN y vacío,
+seguiría dormido). O sea, `count == 0` después del ciclo *implica* "vacío
+y cerrándose".
+
+### `signal` en operación normal, `broadcast` en el cierre
+
+Regla: `signal` cuando el evento satisface a **un** esperador;
+`broadcast` cuando cambia una condición **compartida por todos**.
+
+Un `push` produce exactamente un mensaje (satisface a un consumidor); un
+`pop` libera exactamente una casilla (satisface a un productor). Pasar a
+CLOSING, en cambio, vuelve falso el predicado de todos a la vez — de ahí
+`sync_broadcast_all`.
+
+`signal` es seguro acá porque las condvars están separadas por rol: en
+`not_empty` solo duermen consumidores, todos con el mismo predicado, y en
+`not_full` solo productores. **Si se unificaran en una sola condvar,
+`signal` pasaría a ser un bug silencioso** (podría despertar a un
+productor cuando hacía falta un consumidor, dejando trabajo sin hacer).
+Esta precondición hay que sostenerla si el código cambia.
+
+Costo que evita, con los números del caso de estrés (32 consumidores,
+1000 mensajes): `broadcast` en cada push daría 32 000 despertares, de los
+cuales 31 000 son inútiles — cada uno con su cambio de contexto,
+adquisición de mutex y reevaluación del predicado. Con `signal` son 1000.
+
+Efecto secundario aceptado: un consumidor recién llegado puede "ganarle"
+el mensaje al que fue despertado, que se vuelve a dormir. No se pierde
+nada; el enunciado no exige equidad (*"No se exige reparto equitativo
+entre consumidores ni espera acotada"*).
+
+`all_left` tiene un solo esperador posible (el finisher, y solo puede
+haber uno), así que también le basta `signal`.
+
+### Capturar bajo protección, escribir después
+
+`struct op_snapshot` existe para cumplir *"capturar bajo protección los
+datos necesarios para registrar un evento y escribirlos después"*. La
+ocupación y la marca de tiempo se leen dentro de la región crítica; el
+`fprintf` al CSV ocurre afuera, ya sin el mutex. Que la API lo devuelva
+explícitamente hace difícil equivocarse: no hace falta volver a leer
+`inst->count` después de soltar el bloqueo (que daría un valor distinto).
+
+`enqueue_time_ns` también se toma bajo el mutex, a propósito: así el
+orden de las marcas de tiempo coincide con el orden de `enqueue_seq`. Si
+se tomara afuera, dos mensajes podrían quedar con marcas invertidas
+respecto a su orden real de inserción.
+
+### Reloj de las condvars
+
+`sync_init_primitives` configura las condvars con
+`pthread_condattr_setclock(CLOCK_MONOTONIC)`, no el reloj por defecto
+(`CLOCK_REALTIME`). Hace falta para la pausa interrumpible del Issue #13,
+que usa `pthread_cond_timedwait`: con el reloj por defecto, un cambio de
+hora del sistema alteraría la duración de las esperas.
+
+### Ausencia de deadlock
+
+Un solo mutex, siempre tomado y soltado en la misma función, sin
+anidamiento: no hay dos bloqueos que puedan adquirirse en orden distinto,
+que es la condición necesaria para un deadlock por espera circular.
+`cond_wait` suelta el mutex atómicamente al dormir, así que nadie espera
+por espacio o datos reteniendo el bloqueo que el otro necesita — la regla
+explícita del enunciado.
