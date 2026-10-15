@@ -10,6 +10,9 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
+#include "metricas.h"
+#include "participantes.h"
+
 #define INSTANCE_MAGIC      0xDEADBEEFu   /* arbitrario, != 0, facil de ver en un hexdump/gdb */
 #define INSTANCE_VERSION    1u
 #define PAYLOAD_FILL_SIZE   16             /* ver D1, seccion "Payload: metadata + checksum" */
@@ -49,7 +52,16 @@ struct instance {
 
     uint32_t  active_producers, active_consumers;
 
-    /* tabla de ids usados por rol (unicidad de por vida): se agrega en #12 */
+    /* Conexiones vivas + bit de puerta cerrada (REFS_GATE_CLOSED). Se toma
+     * con CAS en instance_attach sin el mutex; ver D9. */
+    _Atomic uint32_t refs;
+
+    /* Registro de por vida por rol (unicidad de ids), ver D8. */
+    struct participant_table producers;
+    struct participant_table consumers;
+
+    /* Agregados para el resumen del finisher, ver D11. */
+    struct instance_metrics metrics;
 
     struct message messages[];     /* capacity * sizeof(struct message), al final */
 };

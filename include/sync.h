@@ -49,6 +49,10 @@ struct op_snapshot {
     uint64_t seq;          /* enqueue_seq en put, dequeue_seq en get */
     uint64_t time_ns;      /* CLOCK_MONOTONIC, tomado bajo proteccion */
     uint32_t occupancy;    /* count justo despues de la operacion */
+    /* Agregados por el Diseño B (D11) para el resumen por proceso: */
+    uint64_t wait_ns;      /* tiempo dormido en not_full/not_empty en esta op */
+    uint32_t wait_count;   /* cuantas veces durmio en esta op */
+    uint64_t lock_ns;      /* tiempo de adquisicion del mutex en esta op */
 };
 
 enum put_result {
