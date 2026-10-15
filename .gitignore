@@ -1,0 +1,32 @@
+# Objetos y dependencias generadas
+build/
+*.o
+*.d
+*.a
+*.so
+
+# Ejecutables (se generan en la raíz)
+/creator
+/producer
+/consumer
+/finisher
+/tests/bin/
+
+# Sanitizers y depuración
+*.dSYM/
+core
+core.*
+vgcore.*
+
+# Resultados masivos: solo se versionan los seleccionados para el informe
+results/*
+!results/.gitkeep
+!results/seleccionados/
+
+# Entornos locales
+.vscode/
+.idea/
+.DS_Store
+*.swp
+__pycache__/
+.venv/
