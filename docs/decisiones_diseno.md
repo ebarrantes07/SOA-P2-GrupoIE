@@ -128,6 +128,53 @@ proceso que recién llega no puede confiar en que el mutex ya esté
 inicializado — sería circular (necesitaría el mutex para saber si el mutex
 existe).
 
+### Orden de creación y deshacer parcial
+
+El orden de los pasos del `creator` no es cosmético: es lo que garantiza
+que `magic` nunca quede escrito sobre una estructura incompleta. La
+implementación va en el Issue #9, pero la secuencia se fija acá.
+
+1. Validar nombre y capacidad (1..1024). Todavía no se creó nada.
+2. `shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600)` — creación
+   exclusiva. Si devuelve `EEXIST`, la instancia ya existe y se reporta
+   el error **sin tocarla**.
+3. `ftruncate(fd, sizeof(struct instance) + capacity * sizeof(struct message))`.
+4. `mmap(...)` con `MAP_SHARED`.
+5. `close(fd)` — el mapeo sobrevive sin el descriptor.
+6. `sync_init_primitives()`: mutex y las tres condvars con
+   `PTHREAD_PROCESS_SHARED` y `CLOCK_MONOTONIC`.
+7. Escribir `version`, `capacity` y `state = STATE_OPEN`. El resto de
+   contadores ya vale 0: el kernel entrega el segmento lleno de ceros.
+8. **Último:** `atomic_store_explicit(&inst->magic, INSTANCE_MAGIC,
+   memory_order_release)`.
+
+Qué se deshace según dónde falle, para cumplir *"los errores durante la
+creación deberán deshacer únicamente los recursos creados por esa
+operación"*:
+
+| Falla en | Qué deshacer |
+|---|---|
+| 1 (validación) | Nada: no se creó ningún recurso. |
+| 2 (`shm_open`) | Nada. Si fue `EEXIST`, **no** se hace `shm_unlink`: ese segmento es de otra instancia viva y borrarlo sería destruir trabajo ajeno. |
+| 3 o 4 | `close(fd)` + `shm_unlink(name)` — el nombre sí lo creamos nosotros. |
+| 6 | `sync_init_primitives` deshace las primitivas que alcanzó a inicializar; luego `munmap` + `shm_unlink`. |
+| 7 | `sync_destroy_primitives` + `munmap` + `shm_unlink`. |
+| Después de 8 | Nada: la instancia quedó publicada y el `creator` retorna éxito. |
+
+Dos consecuencias que vale la pena tener claras para la defensa:
+
+- Como `magic` se escribe solo si todos los pasos anteriores salieron
+  bien, **una creación abortada no puede dejar un segmento que *parezca*
+  listo**. Y como además se hace `shm_unlink` al fallar, tampoco queda el
+  nombre ocupado por un segmento a medio construir.
+- Entre el paso 2 (el nombre ya existe) y el 8 (listo) hay una ventana en
+  la que otro proceso puede abrir el segmento y leer `magic == 0`. Eso
+  funciona porque el kernel entrega el segmento en ceros y `0 !=
+  INSTANCE_MAGIC` — por eso la constante tiene que ser distinta de cero.
+  Ese proceso falla con un error claro; no reintenta ni espera, porque el
+  enunciado no pide que un participante sobreviva a un `creator` que
+  todavía no terminó.
+
 ### Payload: metadata + checksum
 
 Contenido elegido para que sea "verificable" (exigencia explícita del
