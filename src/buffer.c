@@ -11,14 +11,17 @@
 #include <assert.h>
 
 bool buffer_is_full(const struct instance *inst) {
+    assert(inst->capacity > 0);
     return inst->count == inst->capacity;
 }
 
 bool buffer_is_empty(const struct instance *inst) {
+    assert(inst->capacity > 0);
     return inst->count == 0;
 }
 
 void buffer_push(struct instance *inst, const struct message *msg) {
+    assert(inst->capacity > 0);   /* si no, '%' de abajo es division por cero: UB */
     assert(!buffer_is_full(inst));
 
     inst->messages[inst->tail] = *msg;
@@ -27,6 +30,7 @@ void buffer_push(struct instance *inst, const struct message *msg) {
 }
 
 void buffer_pop(struct instance *inst, struct message *out) {
+    assert(inst->capacity > 0);   /* si no, '%' de abajo es division por cero: UB */
     assert(!buffer_is_empty(inst));
 
     *out = inst->messages[inst->head];
