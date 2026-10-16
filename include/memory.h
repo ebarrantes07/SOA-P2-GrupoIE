@@ -45,7 +45,7 @@ struct instance {
     pthread_mutex_t  mutex;        /* PTHREAD_PROCESS_SHARED */
     pthread_cond_t   not_full;     /* disponibilidad de espacio */
     pthread_cond_t   not_empty;    /* disponibilidad de mensajes */
-    pthread_cond_t   all_left;     /* para que el finisher espere activos == 0 */
+    pthread_cond_t   all_left;     /* el finisher espera refs == 1 (solo el), ver D9 */
 
     uint32_t  head, tail, count;
     uint64_t  enqueue_seq, dequeue_seq;

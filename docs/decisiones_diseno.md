@@ -522,7 +522,7 @@ explícita del enunciado.
 ## D8 — Registro de participantes (`include/participantes.h`)
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#3](../../issues/3) (Diseño B)
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 
 ### Contexto
@@ -595,7 +595,7 @@ CLI, #4).
 ## D9 — Conexiones en curso: puerta de conexión con contador de referencias
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#3](../../issues/3) (Diseño B)
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 
 ### Contexto
@@ -674,7 +674,7 @@ propio finisher está conectado.
 ## D10 — Máquina de estados OPEN / CLOSING / CLOSED y protocolo de cierre
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#3](../../issues/3) (Diseño B)
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 
 ### Transiciones
@@ -710,7 +710,7 @@ enum close_result closing_begin(struct instance *inst)
     inst->state = STATE_CLOSING;                 /* <-- punto de corte */
     fetch_or(&inst->refs, REFS_GATE_CLOSED);     /* D9 */
     inst->metrics.closing_start_ns = now_monotonic_ns();
-    sync_broadcast_all(inst);                    /* D3 */
+    sync_broadcast_all(inst);                    /* D3; incluye la condvar de la pausa (#11) */
     unlock(&inst->mutex);
     return CLOSE_OK;
 }
@@ -742,7 +742,7 @@ audita `aceptados = extraídos + pendientes`.
 | Participante | Al pasar a CLOSING |
 |---|---|
 | Productor bloqueado en `not_full` | `broadcast` lo despierta, ve `state != OPEN` → `PUT_REJECTED_CLOSING` → se retira. |
-| Productor en pausa simulada | La pausa es interrumpible (#13): `broadcast` lo despierta y no intenta insertar. |
+| Productor en pausa simulada | La pausa duerme en una condvar dedicada (`closing`, agregada en #11 por la revisión de #29), nunca en `not_full`. El `broadcast` la interrumpe y el productor sale sin intentar insertar (#13). |
 | Consumidor con mensajes pendientes | Sigue extrayendo; `sync_get` solo devuelve `GET_DRAINED` con el buffer vacío. |
 | Consumidor bloqueado en vacío | `broadcast` lo despierta, ve `count == 0` → `GET_DRAINED` → se retira. |
 | Consumidor procesando un mensaje | Termina el procesamiento simulado (no se interrumpe) y vuelve a `sync_get`. |
@@ -780,7 +780,7 @@ quedaban productores o datos) y los procesos sin registrar salen por
 ## D11 — Métricas y resumen del finisher (`include/metricas.h`)
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#3](../../issues/3) (Diseño B)
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 
 ### Qué se mide, dónde y cuándo
@@ -806,7 +806,8 @@ duraciones sin que el llamador vuelva a tocar el mutex. Lo implementa #11.
 
 **Cambio a `memory.h` (D1):** se reemplaza el comentario "tabla de ids
 usados por rol: se agrega en #12" por `refs` (D9), `producers` y
-`consumers` (D8) y `metrics` (esta entrada). `memory.h` incluye
+`consumers` (D8) y `metrics` (esta entrada). El comentario de `all_left`
+pasa a decir que el finisher espera `refs == 1`, no `activos == 0` (D9). `memory.h` incluye
 `participantes.h` y `metricas.h`; estos solo hacen *forward declaration* de
 `struct instance`, así que no hay inclusión circular.
 
@@ -901,7 +902,7 @@ participante):
 ## D12 — Formato de los CSV de productor, consumidor y finisher
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#3](../../issues/3) (Diseño B)
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 
 ### Contexto
