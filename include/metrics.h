@@ -1,15 +1,15 @@
-/* metricas.h — métricas locales por proceso, agregados compartidos de la
+/* metrics.h — métricas locales por proceso, agregados compartidos de la
  * instancia, histograma de latencia y resumen del finisher.
  *
  * Decisiones documentadas en docs/decisiones_diseno.md (D11 métricas y
  * resumen, D12 formato de los CSV). No cambiar este archivo sin agregar una
  * entrada nueva ahí explicando por qué.
  *
- * Igual que participantes.h, no incluye memory.h: memory.h lo incluye a él
+ * Igual que participants.h, no incluye memory.h: memory.h lo incluye a él
  * para embeber struct instance_metrics en el segmento.
  */
-#ifndef SOA_P2_METRICAS_H
-#define SOA_P2_METRICAS_H
+#ifndef SOA_P2_METRICS_H
+#define SOA_P2_METRICS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -92,4 +92,4 @@ double throughput_msgs_per_s(uint64_t extracted, uint64_t first_start_ns,
 int summary_write_csv(const char *path, const struct instance *inst,
                       uint64_t close_duration_ns);
 
-#endif /* SOA_P2_METRICAS_H */
+#endif /* SOA_P2_METRICS_H */

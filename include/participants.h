@@ -1,4 +1,4 @@
-/* participantes.h — conexión a la instancia, registro de participantes y
+/* participants.h — conexión a la instancia, registro de participantes y
  * máquina de estados OPEN/CLOSING/CLOSED.
  *
  * Decisiones documentadas en docs/decisiones_diseno.md (D8 registro, D9
@@ -9,14 +9,14 @@
  * las operaciones; no incluye memory.h para que memory.h pueda incluirlo a
  * él sin dependencia circular.
  */
-#ifndef SOA_P2_PARTICIPANTES_H
-#define SOA_P2_PARTICIPANTES_H
+#ifndef SOA_P2_PARTICIPANTS_H
+#define SOA_P2_PARTICIPANTS_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 struct instance;            /* definida en memory.h */
-struct participant_stats;   /* definida en metricas.h */
+struct participant_stats;   /* definida en metrics.h */
 
 /* ---- Tipos compartidos (viven dentro de struct instance) -------------- */
 
@@ -131,4 +131,4 @@ void closing_wait_all_left(struct instance *inst);
  * reporta el primero. */
 int closing_release(struct instance *inst, const char *name);
 
-#endif /* SOA_P2_PARTICIPANTES_H */
+#endif /* SOA_P2_PARTICIPANTS_H */

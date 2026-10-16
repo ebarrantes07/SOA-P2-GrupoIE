@@ -10,8 +10,8 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
-#include "metricas.h"
-#include "participantes.h"
+#include "metrics.h"
+#include "participants.h"
 
 #define INSTANCE_MAGIC      0xDEADBEEFu   /* arbitrario, != 0, facil de ver en un hexdump/gdb */
 #define INSTANCE_VERSION    1u

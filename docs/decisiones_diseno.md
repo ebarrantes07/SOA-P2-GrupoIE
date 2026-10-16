@@ -519,7 +519,7 @@ explícita del enunciado.
 
 ---
 
-## D8 — Registro de participantes (`include/participantes.h`)
+## D8 — Registro de participantes (`include/participants.h`)
 
 - **Fecha:** 2026-10-15
 - **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
@@ -777,7 +777,7 @@ quedaban productores o datos) y los procesos sin registrar salen por
 
 ---
 
-## D11 — Métricas y resumen del finisher (`include/metricas.h`)
+## D11 — Métricas y resumen del finisher (`include/metrics.h`)
 
 - **Fecha:** 2026-10-15
 - **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
@@ -808,7 +808,7 @@ duraciones sin que el llamador vuelva a tocar el mutex. Lo implementa #11.
 usados por rol: se agrega en #12" por `refs` (D9), `producers` y
 `consumers` (D8) y `metrics` (esta entrada). El comentario de `all_left`
 pasa a decir que el finisher espera `refs == 1`, no `activos == 0` (D9). `memory.h` incluye
-`participantes.h` y `metricas.h`; estos solo hacen *forward declaration* de
+`participants.h` y `metrics.h`; estos solo hacen *forward declaration* de
 `struct instance`, así que no hay inclusión circular.
 
 ### Latencia: histograma log-lineal en el segmento
