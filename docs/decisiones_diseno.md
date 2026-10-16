@@ -11,7 +11,7 @@ pueda reconstruir por qué el código quedó como quedó sin tener que preguntar
 ## D1 — Layout del segmento de memoria compartida
 
 - **Fecha:** 2026-10-14
-- **Issue:** [#2](../../issues/2) (Diseño A), slice 1
+- **Issue:** [#2](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/2) (Diseño A), slice 1
 - **Quién decide:** Emmanuel · **Revisa:** Isaac
 
 ### Contexto
@@ -255,7 +255,7 @@ y trazar a mano.
 ## D2 — Buffer circular puro (`include/buffer.h`)
 
 - **Fecha:** 2026-10-14
-- **Issue:** [#2](../../issues/2) (Diseño A), slice 2
+- **Issue:** [#2](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/2) (Diseño A), slice 2
 - **Quién decide:** Emmanuel · **Revisa:** Isaac
 
 ### Contexto
@@ -304,7 +304,7 @@ void buffer_pop(struct instance *inst, struct message *out);
 ## D3 — Protocolo de sincronización: `put` / `get` (`include/sync.h`)
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#2](../../issues/2) (Diseño A), slice 3
+- **Issue:** [#2](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/2) (Diseño A), slice 3
 - **Quién decide:** Emmanuel · **Revisa:** Isaac
 
 ### Contexto
@@ -465,7 +465,7 @@ explícita del enunciado.
 ## D4 — Estructura del repositorio y ubicación de los ejecutables
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#1](../../issues/1)
+- **Issue:** [#1](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/1)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 - **Contexto:** el enunciado sugiere `src/`, `include/`, `tests/`, `scripts/`, `results/` y
   `docs/`, y muestra los ejecutables invocados como `./creator`, `./producer`, etc.
@@ -480,7 +480,7 @@ explícita del enunciado.
 ## D5 — Flags de compilación y macros de características
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#1](../../issues/1)
+- **Issue:** [#1](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/1)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 - **Contexto:** el enunciado exige `-std=c17 -Wall -Wextra -Wpedantic -Werror -pthread` y
   pide añadir las macros de características y bibliotecas necesarias. Con `-std=c17` estricto,
@@ -495,7 +495,7 @@ explícita del enunciado.
 ## D6 — Makefile incremental
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#1](../../issues/1)
+- **Issue:** [#1](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/1)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 - **Contexto:** los módulos se implementan en issues distintos a lo largo del proyecto.
 - **Decisión:** el Makefile descubre los módulos con `wildcard` y solo construye los
@@ -510,7 +510,7 @@ explícita del enunciado.
 ## D7 — Resultados versionados
 
 - **Fecha:** 2026-10-15
-- **Issue:** [#1](../../issues/1)
+- **Issue:** [#1](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/1)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
 - **Contexto:** el enunciado pide excluir resultados masivos pero conservar los necesarios
   para reproducir el informe.
