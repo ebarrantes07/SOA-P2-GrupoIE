@@ -23,6 +23,12 @@ COMMON_O := $(patsubst src/%.c,$(OBJDIR)/%.o,$(COMMON))
 # Solo se construyen los ejecutables cuyo main ya existe.
 PRESENT  := $(patsubst src/%.c,%,$(wildcard $(MAINS)))
 
+# Pruebas unitarias por módulo: cada tests/test_*.c es su propio binario,
+# enlazado contra los mismos módulos comunes. Los de integración de punta a
+# punta (#19-#22) corren aparte, sobre los ejecutables de BINS.
+TEST_SRC := $(wildcard tests/test_*.c)
+TEST_BIN := $(patsubst tests/%.c,$(OBJDIR)/%,$(TEST_SRC))
+
 .PHONY: all test clean
 
 all: $(PRESENT)
@@ -34,12 +40,26 @@ $(PRESENT): %: $(OBJDIR)/%.o $(COMMON_O)
 $(OBJDIR)/%.o: src/%.c | $(OBJDIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c -o $@ $<
 
+$(OBJDIR)/test_%.o: tests/test_%.c | $(OBJDIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+$(OBJDIR)/test_%: $(OBJDIR)/test_%.o $(COMMON_O)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 $(OBJDIR):
 	mkdir -p $@
 
-# Placeholder: las pruebas automatizadas se agregan en #19, #20, #21 y #22.
-test: all
-	@echo "make test: aún no hay pruebas definidas."
+test: all $(TEST_BIN)
+	@if [ -z "$(TEST_BIN)" ]; then \
+		echo "make test: aún no hay pruebas en tests/."; \
+	else \
+		fail=0; \
+		for t in $(TEST_BIN); do \
+			echo "-- $$t --"; \
+			$$t || fail=1; \
+		done; \
+		exit $$fail; \
+	fi
 
 clean:
 	rm -rf $(OBJDIR) $(BINS)
