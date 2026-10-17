@@ -88,3 +88,44 @@ uint64_t lat_hist_percentile_ns(const struct latency_hist *h, double p) {
     /* Inalcanzable si h->count > 0 y las cubetas suman h->count. */
     return h->max_ns;
 }
+
+double stats_mean(const double *values, size_t n) {
+    assert(n == 0 || values != NULL);
+
+    if (n == 0) {
+        return 0.0;
+    }
+
+    double sum = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        sum += values[i];
+    }
+    return sum / (double)n;
+}
+
+double stats_stddev(const double *values, size_t n) {
+    assert(n == 0 || values != NULL);
+
+    if (n < 2) {
+        return 0.0;
+    }
+
+    double mean = stats_mean(values, n);
+    double sum_sq_diff = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        double diff = values[i] - mean;
+        sum_sq_diff += diff * diff;
+    }
+    return sqrt(sum_sq_diff / (double)(n - 1));   /* muestral: n-1, no n */
+}
+
+double throughput_msgs_per_s(uint64_t extracted, uint64_t first_start_ns,
+                             uint64_t last_dequeue_ns) {
+    if (last_dequeue_ns <= first_start_ns) {
+        return 0.0;   /* intervalo invalido o nulo: sin esto, la resta de
+                        * enteros sin signo "envolveria" a un numero enorme */
+    }
+
+    uint64_t interval_ns = last_dequeue_ns - first_start_ns;
+    return (double)extracted * 1e9 / (double)interval_ns;
+}
