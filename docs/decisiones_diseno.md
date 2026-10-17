@@ -516,3 +516,471 @@ explícita del enunciado.
   para reproducir el informe.
 - **Decisión:** `.gitignore` excluye `results/*` salvo `results/seleccionados/`, donde se
   guardan los CSV, semillas y gráficas citados en el informe.
+
+---
+
+## D8 — Registro de participantes (`include/participants.h`)
+
+- **Fecha:** 2026-10-15
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+- *"Los identificadores de productor y consumidor serán únicos dentro de su
+  respectivo rol durante toda la vida de la instancia."* → no basta con
+  rechazar un id que está activo: un id que ya se retiró tampoco puede
+  volver a usarse.
+- *"El sistema soportará al menos 32 productores y 32 consumidores por
+  instancia."*
+- *"Los cambios de estado y la admisión de participantes se coordinarán con
+  las operaciones del buffer."* → el registro usa el mismo mutex que
+  `put`/`get` (D3).
+- El resumen pide *"tiempo acumulado de espera (...) por proceso"*, y el
+  finisher lo emite cuando esos procesos ya terminaron.
+
+### Decisión
+
+Una tabla fija por rol dentro de `struct instance`, de
+`MAX_PARTICIPANTS_PER_ROLE = 64` casillas. Cada registro exitoso ocupa una
+casilla **para siempre**: al retirarse, la casilla pasa a `SLOT_LEFT` pero
+conserva el id, así el chequeo de duplicados cubre toda la vida de la
+instancia sin estructuras extra.
+
+```c
+struct participant_slot {   /* 64 bytes */
+    uint32_t id, state;      /* enum slot_state: FREE / ACTIVE / LEFT */
+    int32_t  pid; uint32_t reserved;
+    uint64_t joined_ns, left_ns;
+    uint64_t ops, wait_ns, wait_count, lock_ns;   /* se copian al retirarse */
+};
+struct participant_table { uint32_t used, reserved; struct participant_slot slots[64]; };
+```
+
+`participant_register`, todo bajo el mutex y en este orden:
+
+1. `state != OPEN` → `REG_NOT_OPEN`.
+2. Recorrer las `used` casillas del rol; si alguna tiene el mismo `id` →
+   `REG_DUPLICATE_ID`.
+3. `used == 64` → `REG_TABLE_FULL`.
+4. Ocupar `slots[used++]` como `SLOT_ACTIVE`, incrementar
+   `active_producers`/`active_consumers` y, si `metrics.first_start_ns == 0`,
+   fijarlo (inicio de operación del primer trabajador, para throughput).
+
+Los rechazos no tocan la tabla: es la evidencia que pide #12 (*"rechazo sin
+corromper el registro existente"*).
+
+`participant_leave`, bajo el mutex: casilla a `SLOT_LEFT`, copia de
+`struct participant_stats` a la casilla, `left_ns`, y decremento del
+contador de activos. Los contadores `active_*` (D1) se mantienen aparte de
+la tabla para que la precondición del cierre (D10) sea O(1).
+
+### Alternativas descartadas
+
+- **Bitmap de ids usados (p. ej. ids 1..1024).** Garantiza unicidad de por
+  vida, pero obliga a limitar el rango de ids y no tiene dónde guardar las
+  métricas por proceso para el resumen.
+- **Casillas reutilizables al retirarse.** Rompe la unicidad de por vida o
+  exige una segunda estructura de ids históricos.
+- **64 y no 32.** 32 es el mínimo exigido; 64 deja margen para que el
+  profesor agregue participantes en la demostración. Son 4 KB por rol.
+
+**Límite documentado:** una instancia acepta como máximo 64 registros por
+rol en toda su vida; el 65.º se rechaza con `REG_TABLE_FULL` y un mensaje
+claro. Los ids válidos son cualquier `uint32_t` mayor que 0 (lo valida la
+CLI, #4).
+
+---
+
+## D9 — Conexiones en curso: puerta de conexión con contador de referencias
+
+- **Fecha:** 2026-10-15
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+*"El finalizador espera confirmaciones de retirada y garantiza que no
+quedan usuarios ni esperas sobre las primitivas antes de destruirlas.
+También debe resolver con seguridad las conexiones que estaban en curso al
+comenzar el cierre."*
+
+El problema concreto: un proceso hace `shm_open` + `mmap` y valida `magic`
+(D1), pero todavía no tomó el mutex para registrarse. Si en ese instante
+el finisher ve `active_* == 0` y destruye el mutex, ese proceso hace
+`pthread_mutex_lock` sobre un mutex destruido: comportamiento indefinido.
+Los contadores `active_*` no lo ven porque todavía no se registró.
+
+### Decisión
+
+Un contador atómico de conexiones con un bit de "puerta cerrada":
+
+```c
+_Atomic uint32_t refs;      /* bit 31: REFS_GATE_CLOSED; bits 0..30: conexiones */
+```
+
+**Conectar** (`instance_attach`), sin mutex:
+
+```c
+mapear; validar magic (acquire) y version     /* D1 */
+v = load(refs)
+do {
+    if (v & REFS_GATE_CLOSED) { munmap; return ATTACH_CLOSING; }  /* no toca primitivas */
+} while (!compare_exchange(&refs, &v, v + 1));
+return ATTACH_OK;           /* desde aquí, y solo desde aquí, puede usar el mutex */
+```
+
+**Desconectar** (`instance_detach`), bajo el mutex:
+`fetch_sub(&refs, 1)`; `signal(all_left)`; `unlock`; `munmap`.
+
+**Cerrar la puerta:** el finisher hace `fetch_or(&refs, REFS_GATE_CLOSED)`
+dentro de la misma región crítica de `OPEN → CLOSING` (D10).
+
+**Esperar:** el finisher, bajo el mutex,
+`while ((refs & REFS_COUNT_MASK) > 1) wait(all_left)`. Es `> 1` porque el
+propio finisher está conectado.
+
+### Por qué es correcto
+
+- **Nadie entra después de cerrar la puerta.** El CAS de conexión falla en
+  cuanto observa el bit, y el bit nunca se apaga. Las conexiones que el
+  finisher espera forman un conjunto fijo que solo puede decrecer.
+- **Ninguna espera perdida.** Los incrementos ocurren solo con la puerta
+  abierta, o sea antes de que el finisher empiece a esperar. Todo
+  decremento posterior ocurre bajo el mutex seguido de `signal(all_left)`,
+  así que el finisher no puede dormirse sobre un predicado que ya cambió.
+- **Quien falla la conexión no toca primitivas.** Un proceso que ve la
+  puerta cerrada solo desmapea su propia vista. Aunque el finisher ya haya
+  destruido el mutex y hecho `shm_unlink`, el mapeo de ese proceso sigue
+  siendo válido hasta su `munmap` (el objeto vive hasta el último mapeo).
+- **Toda conexión exitosa se resuelve.** Un proceso conectado que llega
+  tarde a registrarse recibe `REG_NOT_OPEN` (D8), se desconecta y con eso
+  libera al finisher. Un participante registrado se desconecta al
+  retirarse.
+
+### Alternativas descartadas
+
+- **Esperar solo `active_* == 0`.** No ve las conexiones en curso; es
+  justamente el caso que pide el enunciado.
+- **Contador de conexiones sin bit de puerta.** Deja abierta la carrera
+  "el finisher lee 0 y destruye; un proceso incrementa justo después y
+  usa el mutex".
+- **Hacer `shm_unlink` al pasar a CLOSING.** Ayuda (nadie nuevo puede
+  abrir el nombre) pero no resuelve a quien ya lo abrió. Se mantiene al
+  final del cierre, después de destruir las primitivas.
+
+---
+
+## D10 — Máquina de estados OPEN / CLOSING / CLOSED y protocolo de cierre
+
+- **Fecha:** 2026-10-15
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Transiciones
+
+| De | A | Quién | Dónde | Protección |
+|---|---|---|---|---|
+| (no existe) | OPEN | `creator` | pasos 7–8 de D1 | publicación con `magic` (release/acquire) |
+| OPEN | CLOSING | `finisher` | `closing_begin` | mutex; misma región crítica que la precondición y el cierre de la puerta |
+| CLOSING | CLOSED | `finisher` | `closing_release` | mutex tomado y `refs == 1` (solo el finisher) |
+| CLOSED | (no existe) | `finisher` | `closing_release` | `shm_unlink` tras destruir las primitivas |
+
+No hay transiciones de regreso. Un `closing_begin` rechazado no cambia
+nada: la instancia sigue OPEN.
+
+`state` solo se escribe con el mutex tomado y solo lo escribe el finisher
+(además del `creator` antes de publicar). Se lee siempre bajo el mutex.
+
+### Precondición y finalizador único
+
+```c
+enum close_result closing_begin(struct instance *inst)
+{
+    lock(&inst->mutex);
+    if (inst->state != STATE_OPEN) {             /* otro finisher ya cortó */
+        unlock(&inst->mutex);
+        return CLOSE_ALREADY_CLOSING;
+    }
+    if (inst->active_consumers == 0 &&
+        (inst->active_producers > 0 || inst->count > 0)) {
+        unlock(&inst->mutex);                    /* sigue OPEN, sin tocar nada */
+        return CLOSE_NO_CONSUMER;
+    }
+    inst->state = STATE_CLOSING;                 /* <-- punto de corte */
+    fetch_or(&inst->refs, REFS_GATE_CLOSED);     /* D9 */
+    inst->metrics.closing_start_ns = now_monotonic_ns();
+    sync_broadcast_all(inst);                    /* D3; incluye la condvar de la pausa (#11) */
+    unlock(&inst->mutex);
+    return CLOSE_OK;
+}
+```
+
+- **Finalizador único sin bandera extra.** La transición misma es la
+  "reserva": el primer finisher que la hace queda como conductor; cualquier
+  otro ve `state != OPEN` y recibe `CLOSE_ALREADY_CLOSING`. Si llega
+  después de cerrada la puerta, falla antes, en la conexión
+  (`ATTACH_CLOSING`). En ambos casos el mensaje es "ya hay un cierre en
+  curso".
+- **Un finisher rechazado por la precondición no reserva nada**, así que el
+  usuario puede iniciar un consumidor y volver a pedir el cierre.
+- **Instancia sin trabajadores:** `active_producers == 0` y `count == 0`, la
+  precondición se cumple y el cierre procede.
+
+### Punto de corte
+
+`state = STATE_CLOSING` ocurre bajo el mutex. `sync_put` (D3) revisa el
+estado bajo el mismo mutex justo antes de `buffer_push`, así que cada
+inserción queda totalmente antes del corte (aceptada, con `enqueue_seq`) o
+totalmente después (`PUT_REJECTED_CLOSING`). El registro (D8) usa el mismo
+chequeo, así que tampoco hay registros a medias. Al cortar se guardan
+`enqueue_seq`, `dequeue_seq` y `count` en el log del finisher: ahí se
+audita `aceptados = extraídos + pendientes`.
+
+### Qué observa cada participante
+
+| Participante | Al pasar a CLOSING |
+|---|---|
+| Productor bloqueado en `not_full` | `broadcast` lo despierta, ve `state != OPEN` → `PUT_REJECTED_CLOSING` → se retira. |
+| Productor en pausa simulada | La pausa duerme en una condvar dedicada (`closing`, agregada en #11 por la revisión de #29), nunca en `not_full`. El `broadcast` la interrumpe y el productor sale sin intentar insertar (#13). |
+| Consumidor con mensajes pendientes | Sigue extrayendo; `sync_get` solo devuelve `GET_DRAINED` con el buffer vacío. |
+| Consumidor bloqueado en vacío | `broadcast` lo despierta, ve `count == 0` → `GET_DRAINED` → se retira. |
+| Consumidor procesando un mensaje | Termina el procesamiento simulado (no se interrumpe) y vuelve a `sync_get`. |
+| Proceso conectado sin registrar | `REG_NOT_OPEN` → se desconecta (D9). |
+| Proceso que aún no se conectó | `ATTACH_CLOSING` → no toca primitivas. |
+
+### Orden del cierre en el finisher
+
+```text
+instance_attach(name)                          # toma su propia referencia
+r = closing_begin()                             # D10
+si r != CLOSE_OK: log, instance_detach, salir con error (≠ 0)
+closing_wait_all_left()                         # retorna con el mutex tomado
+closing_release(name)                           # CLOSED, unlock, destroy, shm_unlink
+close_ns = now - metrics.closing_start_ns       # "hasta completar la liberación"
+summary_write_csv(summary, inst, close_ns)      # lee el segmento, aún mapeado
+munmap(inst)
+```
+
+`closing_release` no desmapea para que el resumen pueda leer los
+agregados sin copiarlos antes. La lectura sin mutex es segura porque ya no
+queda nadie conectado ni primitivas que proteger.
+
+### Ausencia de deadlock en el cierre
+
+El finisher espera en `all_left` sobre el mismo y único mutex (D3), sin
+anidar. Cada conexión que espera se resuelve en tiempo finito con
+participantes cooperantes: los productores salen por el corte, los
+consumidores salen al drenar (y hay al menos uno, por la precondición, si
+quedaban productores o datos) y los procesos sin registrar salen por
+`REG_NOT_OPEN`.
+
+---
+
+## D11 — Métricas y resumen del finisher (`include/metrics.h`)
+
+- **Fecha:** 2026-10-15
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Qué se mide, dónde y cuándo
+
+| Métrica | Se toma en | Bajo mutex | Se guarda en |
+|---|---|---|---|
+| Aceptados | `enqueue_seq` (D3) | sí | segmento |
+| Extraídos | `dequeue_seq` (D3) | sí | segmento |
+| Pendientes | `count` | sí | segmento |
+| Rechazados por el corte | `sync_put` | sí | `metrics.rejected_puts` |
+| Latencia inserción → extracción | `sync_get`: `snap.time_ns - msg.enqueue_time_ns` | sí | `metrics.latency` (histograma) |
+| Espera por espacio / datos | alrededor del `while … cond_wait` | se mide adentro | `op_snapshot.wait_ns` → stats locales → casilla |
+| Adquisición de la exclusión | alrededor de `pthread_mutex_lock` | justo antes/después | `op_snapshot.lock_ns` → stats locales → casilla |
+| Primer inicio de trabajador | registro del primer participante | sí | `metrics.first_start_ns` |
+| Última extracción | `sync_get` | sí | `metrics.last_dequeue_ns` |
+| Duración del cierre | `closing_start_ns` → fin de `closing_release` | — | local del finisher |
+
+Todas las marcas usan `CLOCK_MONOTONIC`.
+
+**Cambio propuesto a `sync.h` (D3):** `struct op_snapshot` gana `wait_ns`,
+`wait_count` y `lock_ns` para que `sync_put`/`sync_get` devuelvan esas
+duraciones sin que el llamador vuelva a tocar el mutex. Lo implementa #11.
+
+**Cambio a `memory.h` (D1):** se reemplaza el comentario "tabla de ids
+usados por rol: se agrega en #12" por `refs` (D9), `producers` y
+`consumers` (D8) y `metrics` (esta entrada). El comentario de `all_left`
+pasa a decir que el finisher espera `refs == 1`, no `activos == 0` (D9). `memory.h` incluye
+`participants.h` y `metrics.h`; estos solo hacen *forward declaration* de
+`struct instance`, así que no hay inclusión circular.
+
+### Latencia: histograma log-lineal en el segmento
+
+Guardar cada latencia exigiría memoria no acotada en el segmento. Se usa un
+histograma de 496 cubetas (4 KB): valores menores que 8 ns son exactos; el
+resto se divide en 8 sub-cubetas por potencia de 2:
+
+```c
+if (ns < 8) bucket = ns;
+else { e = floor(log2(ns)); sub = (ns >> (e - 3)) & 7; bucket = (e - 2) * 8 + sub; }
+```
+
+- **Media:** exacta (`sum_ns / count`).
+- **Percentil 95:** se recorre el histograma acumulando hasta el 95 % y se
+  reporta el punto medio de la cubeta. Error relativo ≤ 6.25 %. **El
+  resumen lo declara como aproximado.**
+- **Para el experimento** el p95 exacto se calcula aparte desde los CSV de
+  los consumidores (`t_ns - enqueue_time_ns` de cada `GET`, D12).
+
+`lat_hist_add` corre dentro de la región crítica de `sync_get`: son unas
+pocas operaciones enteras sin llamadas al sistema, un costo despreciable
+frente a la adquisición del mutex. Hacerlo afuera obligaría a volver a
+tomar el mutex.
+
+### Esperas combinadas, declaradas como tales
+
+- **Espera por datos del consumidor** incluye la espera final en vacío
+  hasta que llega el `broadcast` del cierre. No es "falta de productores"
+  pura: el resumen lo aclara en la columna `note`.
+- **Espera por espacio del productor** no incluye su pausa simulada; la
+  pausa no es una espera de sincronización.
+- **Adquisición de la exclusión** mide solo `pthread_mutex_lock` en
+  `put`/`get`, incluido el re-adquirir al despertar de `cond_wait`, porque
+  POSIX no los separa. Se declara así.
+
+### Throughput
+
+`extraídos / (last_dequeue_ns - first_start_ns)`, en mensajes por segundo,
+como define el enunciado.
+
+### Formato del resumen (`--summary`)
+
+CSV en formato largo, una métrica por fila, para que los scripts lo lean
+sin conocer las columnas de antemano:
+
+```text
+metric,role,id,value,unit,note
+```
+
+| Columna | Tipo | Contenido |
+|---|---|---|
+| `metric` | texto | nombre de la métrica (tabla siguiente) |
+| `role` | texto | `instance`, `producer` o `consumer` |
+| `id` | entero | id del participante; `0` para `instance` |
+| `value` | número | entero, o decimal con punto y hasta 6 decimales |
+| `unit` | texto | `msgs`, `ns`, `msgs_per_s`, `count`, `bool` |
+| `note` | texto | aclaración sin comas; vacío si no aplica |
+
+Filas de instancia (`role = instance`, `id = 0`):
+
+| `metric` | `unit` | `note` |
+|---|---|---|
+| `accepted` | msgs | |
+| `extracted` | msgs | |
+| `pending` | msgs | |
+| `rejected_puts` | count | intentos rechazados por el corte; no son aceptados |
+| `invariant_ok` | bool | 1 si `accepted = extracted + pending` y `pending = 0` |
+| `latency_mean` | ns | exacta |
+| `latency_p95` | ns | aproximada por histograma (error ≤ 6.25 %) |
+| `latency_max` | ns | |
+| `throughput` | msgs_per_s | primer inicio de trabajador a última extracción |
+| `active_interval` | ns | denominador del throughput |
+| `close_duration` | ns | de CLOSING a liberación completa |
+| `producers` | count | registros de por vida |
+| `consumers` | count | registros de por vida |
+
+Filas por participante (una por casilla usada; `role` y `id` del
+participante):
+
+| `metric` | `unit` | `note` |
+|---|---|---|
+| `ops` | msgs | aceptados (productor) o extraídos (consumidor) |
+| `wait_space` / `wait_data` | ns | productor / consumidor; para el consumidor: incluye la espera final hasta el cierre |
+| `wait_count` | count | |
+| `lock_acquire` | ns | incluye re-adquisición al despertar de `cond_wait` |
+| `lifetime` | ns | `left_ns - joined_ns` |
+
+---
+
+## D12 — Formato de los CSV de productor, consumidor y finisher
+
+- **Fecha:** 2026-10-15
+- **Issue:** [#3](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/3) (Diseño B)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+*"Los logs registrarán rol, id, evento, marca monotónica, identidad del
+mensaje, enqueue_seq y ocupación capturada en la operación protegida. Los
+retiros incluirán un dequeue_seq global (...) Se registrarán también
+incorporaciones, retiros y cambios de estado suficientes para auditar el
+cierre."*
+
+### Decisión
+
+Un CSV por proceso (`--log`), **las mismas columnas para todos los roles**,
+así el verificador (#7) puede concatenarlos sin adaptar el parser. Cabecera
+en la primera línea, separador `,`, fin de línea `\n`, sin comillas (ningún
+campo contiene comas). Un campo que no aplica a un evento va vacío.
+
+```text
+role,id,event,t_ns,producer_id,sequence,enqueue_seq,dequeue_seq,enqueue_time_ns,occupancy,checksum,payload_ok,detail
+```
+
+| Columna | Tipo | Contenido |
+|---|---|---|
+| `role` | texto | `producer`, `consumer` o `finisher` |
+| `id` | uint32 | id del proceso; `0` para el finisher |
+| `event` | texto | ver tabla de eventos |
+| `t_ns` | uint64 | `CLOCK_MONOTONIC` del evento; en `PUT`/`GET` es la marca tomada bajo el mutex |
+| `producer_id` | uint32 | identidad del mensaje |
+| `sequence` | uint64 | identidad del mensaje (por productor, desde 1) |
+| `enqueue_seq` | uint64 | orden global de inserción |
+| `dequeue_seq` | uint64 | orden global de extracción |
+| `enqueue_time_ns` | uint64 | marca de inserción que viaja en el mensaje |
+| `occupancy` | uint32 | `count` justo después de la operación, capturado bajo el mutex |
+| `checksum` | hex | FNV-1a del payload (D1), 8 dígitos hex con prefijo `0x` |
+| `payload_ok` | 0/1 | el consumidor recalculó `fill` y `checksum` y coinciden |
+| `detail` | texto | motivo de un rechazo o dato de auditoría, sin comas |
+
+### Eventos y campos que llevan
+
+| Rol | `event` | Campos además de `role,id,event,t_ns` |
+|---|---|---|
+| prod./cons. | `JOIN` | `detail` = pid |
+| prod./cons. | `JOIN_REJECTED` | `detail` = `duplicate_id` / `not_open` / `table_full` / `closing` / `not_found` |
+| productor | `PUT` | `producer_id, sequence, enqueue_seq, enqueue_time_ns, occupancy, checksum` |
+| productor | `PUT_REJECTED` | `producer_id, sequence` del intento; `detail` = `closing` |
+| consumidor | `GET` | `producer_id, sequence, enqueue_seq, dequeue_seq, enqueue_time_ns, occupancy, checksum, payload_ok` |
+| consumidor | `PROCESSED` | `producer_id, sequence, dequeue_seq` (fin del procesamiento simulado) |
+| consumidor | `DRAINED` | `occupancy` (= 0) |
+| prod./cons. | `LEAVE` | `detail` = `quota_done` / `closing` / `drained` |
+| finisher | `CLOSE_REQUEST` | — |
+| finisher | `CLOSE_REJECTED` | `detail` = `no_consumer` / `already_closing` |
+| finisher | `CLOSING` | `enqueue_seq` (aceptados), `dequeue_seq` (extraídos) y `occupancy` (pendientes) **en el punto de corte** |
+| finisher | `ALL_LEFT` | — |
+| finisher | `CLOSED` | `detail` = `released` |
+
+Ejemplo:
+
+```text
+role,id,event,t_ns,producer_id,sequence,enqueue_seq,dequeue_seq,enqueue_time_ns,occupancy,checksum,payload_ok,detail
+producer,1,PUT,81234567000,1,1,1,,81234567000,1,0x9c3a51e2,,
+consumer,1,GET,81234612000,1,1,1,1,81234567000,0,0x9c3a51e2,1,
+```
+
+### Lo que permite verificar
+
+- **Pérdidas y duplicados:** cruzar `PUT` con `GET` por
+  `(producer_id, sequence)`.
+- **Contenido alterado:** `GET.payload_ok = 0`, o `GET.checksum ≠
+  PUT.checksum` para la misma identidad.
+- **FIFO:** ordenando los `GET` de todos los consumidores por
+  `dequeue_seq`, la secuencia de `enqueue_seq` tiene que ser creciente y sin
+  huecos. Esto no depende del orden en que se escribieron los archivos.
+- **Corte y cierre:** ningún `PUT` con `enqueue_seq` mayor que el del
+  evento `CLOSING`; al final, `aceptados = extraídos`.
+- **Latencia exacta:** `GET.t_ns - GET.enqueue_time_ns`.
+
+### Opción agregada al finisher
+
+El finisher acepta `--log <ruta>` opcional (el enunciado permite agregar
+opciones) para registrar sus cambios de estado. Sin `--log`, imprime los
+mismos eventos en la consola.
