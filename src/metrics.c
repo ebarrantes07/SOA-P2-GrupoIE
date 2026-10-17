@@ -26,8 +26,16 @@ uint32_t lat_hist_bucket(uint64_t ns) {
     }
 
     uint32_t e = floor_log2_u64(ns);   /* e >= 3, porque ns >= 8 */
+    assert(e >= LAT_SUB_BITS);   /* si no, el shift de abajo es UB (negativo) */
+
     uint32_t sub = (uint32_t)((ns >> (e - LAT_SUB_BITS)) & (LAT_SUB_BUCKETS - 1));
-    return (e - 2u) * LAT_SUB_BUCKETS + sub;
+    uint32_t bucket = (e - 2u) * LAT_SUB_BUCKETS + sub;
+
+    /* bucket alimenta directo un indice de arreglo en memoria compartida
+     * (h->buckets[...] en lat_hist_add); fuera de rango ahi no crashea
+     * limpio, corrompe en silencio lo que este al lado. */
+    assert(bucket < LAT_BUCKETS);
+    return bucket;
 }
 
 uint64_t lat_hist_bucket_mid(uint32_t bucket) {
