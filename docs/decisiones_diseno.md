@@ -984,3 +984,129 @@ consumer,1,GET,81234612000,1,1,1,1,81234567000,0,0x9c3a51e2,1,
 El finisher acepta `--log <ruta>` opcional (el enunciado permite agregar
 opciones) para registrar sus cambios de estado. Sin `--log`, imprime los
 mismos eventos en la consola.
+
+---
+
+## D13 — Módulo de memoria compartida y `creator`
+
+- **Fecha:** 2026-10-17
+- **Issue:** [#9](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/9)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+D1 fija el layout, el orden de creación y qué deshacer ante cada falla. Esta
+entrada agrega lo que D1 deja abierto al implementarlo, más las
+observaciones de la revisión de #29 que el issue #9 recogió.
+
+### API (`include/memory.h`, `src/memory.c`)
+
+```c
+size_t             instance_segment_size(uint32_t capacity);
+bool               instance_name_is_valid(const char *name);
+const char        *memory_result_str(enum memory_result r);
+enum memory_result memory_create(const char *name, uint32_t capacity,
+                                 struct instance **out, size_t *map_len);
+enum memory_result memory_open(const char *name, struct instance **out,
+                               size_t *map_len);
+int                memory_unmap(struct instance *inst, size_t map_len);
+int                memory_unlink(const char *name);
+```
+
+`memory_create` sigue al pie de la letra los 8 pasos y la tabla de
+deshacer de D1. `memory_open` es la parte de "conectarse" que no toca
+primitivas: `instance_attach` (D9, #12) la usa y después toma la
+referencia de conexión.
+
+Los resultados son un `enum memory_result` en vez de `-errno`, porque los
+casos que el usuario tiene que distinguir (ya existe, no existe, no está
+lista, incompatible) no se corresponden uno a uno con un `errno`. Para
+`MEM_SYS_ERROR`, `errno` queda con la causa.
+
+### Formato del nombre
+
+`/` seguido de 1 a 30 caracteres de `[A-Za-z0-9_-]` (31 en total). POSIX
+solo garantiza el `/` inicial y la ausencia de otros `/`; el resto depende
+del sistema. 31 es el límite de macOS (`PSHMNAMLEN`) y cabe holgado en el
+de Linux (`NAME_MAX`). Restringir los caracteres evita espacios, `/` y
+caracteres de control en nombres que también se usan en mensajes y
+scripts. El ejemplo del enunciado (`/soa_p2_g1`) cumple.
+
+### Validaciones al abrir (revisión de #29)
+
+`memory_open` rechaza el segmento, desmapeándolo, si:
+
+1. Es más chico que `struct instance`: un `creator` que aún no hizo
+   `ftruncate`, o un segmento ajeno. No se puede ni leer `magic` →
+   `MEM_NOT_READY`.
+2. `magic != INSTANCE_MAGIC` (con `acquire`) → `MEM_NOT_READY`.
+3. `version`, `capacity` (1..1024) o el tamaño del segmento no coinciden
+   → `MEM_INCOMPATIBLE`.
+
+**Tamaño en macOS:** Linux reporta en `fstat` el tamaño exacto del
+`ftruncate`; macOS lo redondea al tamaño de página. Se acepta el exacto o
+ese redondeo, nada más. Las pruebas usan capacidades que dan tamaños
+distintos incluso redondeados.
+
+### Otros detalles de la implementación
+
+- **`ftruncate` se reintenta ante `EINTR`**, como pide el enunciado sobre
+  interrupciones de llamadas. Si falla por otra causa, se deshace como en
+  la fila "3 o 4" de D1.
+- **`_Static_assert(ATOMIC_INT_LOCK_FREE == 2)`** en `memory.h`: los
+  atómicos del segmento (`magic`, `refs`) solo sincronizan entre procesos
+  si son lock-free.
+- **`struct message` gana `uint32_t reserved`** después de `producer_id`.
+  Hace explícitos los 4 bytes de relleno que el compilador ya insertaba
+  (`sizeof` sigue en 64, verificado con `_Static_assert`), en línea con el
+  cuidado de D1 sobre `struct payload`. Siempre vale 0.
+- **`sync_init_primitives` y `sync_destroy_primitives` se implementan en
+  `src/sync.c` en este issue**, porque el `creator` las necesita en el
+  paso 6. Inicializan las tres condvars actuales; #11 agrega `put`/`get`,
+  `lock`/`unlock`, `broadcast` y la condvar dedicada de la pausa.
+- **`creator` desmapea al terminar**: el objeto de memoria compartida
+  persiste hasta el `shm_unlink` del finisher.
+
+### `pthread_condattr_setclock` en macOS
+
+macOS no implementa la opción *Clock Selection* de POSIX, así que
+`pthread_condattr_setclock` no existe ahí. Se usa solo si
+`_POSIX_CLOCK_SELECTION > 0`, que en GNU/Linux (el entorno de referencia)
+siempre se cumple. En macOS las condvars quedan con el reloj por defecto y
+sirven solo para desarrollar y probar localmente. Es una limitación del
+entorno documentada también en #23.
+
+### Análisis de argumentos de `creator`
+
+Mínimo y estricto: `--name` y `--capacity` obligatorios, sin repetir, sin
+opciones desconocidas. La capacidad se convierte con `strtoull` y se
+rechaza si está vacía, tiene signo o espacios, basura al final u
+overflow. El issue #4 unifica este análisis con el de los demás
+ejecutables.
+
+---
+
+## D14 — Compilador por defecto en el Makefile
+
+- **Fecha:** 2026-10-17
+- **Issue:** [#9](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/9) (corrige D5)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+D5 puso `CC ?= gcc`. Al revisar #33 se vio que esa línea nunca tiene
+efecto: make predefine `CC = cc`, y `?=` solo asigna si la variable no
+tiene valor. Los comandos mostraban `cc`. En Linux `cc` suele ser `gcc`,
+pero el enunciado pide GCC explícitamente.
+
+### Decisión
+
+```make
+ifeq ($(origin CC),default)
+CC := gcc
+endif
+```
+
+`$(origin CC)` vale `default` solo si el valor viene de make. Así se usa
+`gcc` por defecto y se respeta un compilador elegido por el usuario
+(`make CC=clang` o variable de entorno), que era la intención de D5.

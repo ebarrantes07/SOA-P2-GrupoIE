@@ -49,8 +49,18 @@ Además se define `_POSIX_C_SOURCE=200809L` como macro de características y se 
 
 ## Uso
 
-_Pendiente: se completa a medida que se implementan los ejecutables (interfaz mínima del
-enunciado, formatos CSV y protocolo de ejecución y cierre)._
+_Se completa a medida que se implementan los ejecutables (interfaz mínima del enunciado,
+formatos CSV y protocolo de ejecución y cierre)._
+
+### creator
+
+```bash
+./creator --name /soa_p2_g1 --capacity 8
+```
+
+Crea e inicializa la instancia y termina con código 0 cuando ya acepta participantes. El
+nombre es `/` seguido de 1 a 30 caracteres `[A-Za-z0-9_-]` y la capacidad va de 1 a 1024.
+Si ya existe una instancia con ese nombre, la rechaza sin modificarla (código 1).
 
 ## Versión entregada
 
