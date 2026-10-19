@@ -84,4 +84,50 @@ bool log_row_parse(const char *line, struct log_row *out);
  * *out_rows en NULL, *out_count en 0 y devuelve false. */
 bool log_rows_read(FILE *f, struct log_row **out_rows, size_t *out_count);
 
+/* ---- Verificación (D15) ----------------------------------------------- */
+
+enum violation_kind {
+    VIOLATION_LOST,         /* insertado y nunca extraído */
+    VIOLATION_DUPLICATED,   /* extraído más de una vez */
+    VIOLATION_PHANTOM,      /* extraído sin haber sido insertado */
+    VIOLATION_REPEATED_ID   /* insertado dos veces con la misma identidad */
+};
+
+struct violation {
+    enum violation_kind kind;
+    uint32_t producer_id;   /* identidad del mensaje afectado */
+    uint64_t sequence;
+    uint64_t gets;          /* extracciones halladas para esa identidad */
+};
+
+/* Acumula las violaciones de todos los chequeos: cada uno agrega las
+ * suyas al mismo reporte, así una corrida mala se diagnostica de una
+ * sola pasada en vez de arreglar una cosa, volver a correr y encontrar
+ * la siguiente. Se inicializa en cero ({0}) y se libera con
+ * verify_report_free. */
+struct verify_report {
+    struct violation *items;
+    size_t count;
+    size_t cap;             /* interno: capacidad reservada en items */
+};
+
+void verify_report_free(struct verify_report *rep);
+
+/* Texto corto y estable para el reporte, en el estilo de
+ * memory_result_str. */
+const char *violation_kind_str(enum violation_kind kind);
+
+/* Cruza los PUT con los GET de `rows` por (producer_id, sequence) y
+ * agrega a *rep toda identidad que no se conserve: perdida, extraída de
+ * más, extraída sin haber entrado, o insertada dos veces. Los demás
+ * eventos se ignoran; en particular PUT_REJECTED, que lleva identidad
+ * pero corresponde a un mensaje que nunca entró al buffer.
+ *
+ * Las violaciones quedan ordenadas por (producer_id, sequence), y cada
+ * identidad produce a lo sumo una. Devuelve false solo si se quedó sin
+ * memoria: encontrar violaciones no es un error de esta función, es su
+ * resultado. */
+bool verify_identities(const struct log_row *rows, size_t n,
+                       struct verify_report *rep);
+
 #endif /* SOA_P2_VERIFY_H */

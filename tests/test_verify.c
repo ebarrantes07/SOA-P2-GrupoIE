@@ -415,6 +415,251 @@ static bool test_rows_read_rejects_split_line(void) {
     return true;
 }
 
+/* ---- Conservacion de identidades (D15, chequeo 1) -------------------- */
+
+static struct log_row put_row(uint32_t producer_id, uint64_t sequence) {
+    struct log_row r = {0};
+    r.role = LOG_ROLE_PRODUCER;
+    r.id = producer_id;
+    r.event = LOG_EVENT_PUT;
+    r.producer_id = producer_id;
+    r.sequence = sequence;
+    return r;
+}
+
+static struct log_row get_row(uint32_t producer_id, uint64_t sequence) {
+    struct log_row r = {0};
+    r.role = LOG_ROLE_CONSUMER;
+    r.id = 9;
+    r.event = LOG_EVENT_GET;
+    r.producer_id = producer_id;
+    r.sequence = sequence;
+    return r;
+}
+
+static struct log_row event_row(enum log_event event, uint32_t producer_id,
+                                uint64_t sequence) {
+    struct log_row r = {0};
+    r.role = LOG_ROLE_PRODUCER;
+    r.id = producer_id;
+    r.event = event;
+    r.producer_id = producer_id;
+    r.sequence = sequence;
+    return r;
+}
+
+/* Una corrida sana: todo lo insertado se extrajo una sola vez, y los
+ * eventos que no son PUT/GET no estorban. */
+static bool test_identities_clean_run(void) {
+    struct log_row rows[] = {
+        event_row(LOG_EVENT_JOIN, 1, 0),
+        put_row(1, 1), put_row(1, 2), put_row(2, 1),
+        get_row(2, 1), get_row(1, 1), get_row(1, 2),   /* desordenados a proposito */
+        event_row(LOG_EVENT_DRAINED, 0, 0),
+        event_row(LOG_EVENT_LEAVE, 1, 0),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_identities_detects_loss(void) {
+    struct log_row rows[] = {
+        put_row(1, 1), put_row(1, 2),
+        get_row(1, 1),   /* el 2 nunca sale */
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_LOST);
+    CHECK(rep.items[0].producer_id == 1);
+    CHECK(rep.items[0].sequence == 2);
+    CHECK(rep.items[0].gets == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_identities_detects_duplicate(void) {
+    struct log_row rows[] = {
+        put_row(3, 7),
+        get_row(3, 7), get_row(3, 7), get_row(3, 7),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_DUPLICATED);
+    CHECK(rep.items[0].producer_id == 3);
+    CHECK(rep.items[0].sequence == 7);
+    CHECK(rep.items[0].gets == 3);
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_identities_detects_phantom(void) {
+    struct log_row rows[] = {
+        put_row(1, 1), get_row(1, 1),
+        get_row(4, 9),   /* nadie lo inserto */
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_PHANTOM);
+    CHECK(rep.items[0].producer_id == 4);
+    CHECK(rep.items[0].sequence == 9);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Dos PUT con la misma identidad: aunque las extracciones cuadren en
+ * cantidad, el productor violo la unicidad de (producer_id, sequence). */
+static bool test_identities_detects_repeated_id(void) {
+    struct log_row rows[] = {
+        put_row(1, 1), put_row(1, 1),
+        get_row(1, 1), get_row(1, 1),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_REPEATED_ID);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* PUT_REJECTED lleva identidad pero el mensaje nunca entro al buffer:
+ * contarlo como insertado convertiria cada rechazo en una perdida. */
+static bool test_identities_ignores_rejected_put(void) {
+    struct log_row rows[] = {
+        put_row(1, 1), get_row(1, 1),
+        event_row(LOG_EVENT_PUT_REJECTED, 1, 2),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Varias violaciones a la vez: se reportan todas, ordenadas por
+ * (producer_id, sequence). */
+static bool test_identities_reports_all_sorted(void) {
+    struct log_row rows[] = {
+        put_row(2, 1),                      /* perdido */
+        put_row(1, 5), get_row(1, 5), get_row(1, 5),   /* duplicado */
+        get_row(1, 2),                      /* fantasma */
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 3);
+
+    CHECK(rep.items[0].producer_id == 1 && rep.items[0].sequence == 2);
+    CHECK(rep.items[0].kind == VIOLATION_PHANTOM);
+    CHECK(rep.items[1].producer_id == 1 && rep.items[1].sequence == 5);
+    CHECK(rep.items[1].kind == VIOLATION_DUPLICATED);
+    CHECK(rep.items[2].producer_id == 2 && rep.items[2].sequence == 1);
+    CHECK(rep.items[2].kind == VIOLATION_LOST);
+
+    verify_report_free(&rep);
+    return true;
+}
+
+/* El reporte acumula: cada chequeo agrega lo suyo sin pisar lo anterior. */
+static bool test_report_accumulates(void) {
+    struct log_row first[] = {put_row(1, 1)};
+    struct log_row second[] = {get_row(2, 2)};
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(first, 1, &rep));
+    CHECK(rep.count == 1);
+    CHECK(verify_identities(second, 1, &rep));
+    CHECK(rep.count == 2);
+    CHECK(rep.items[0].kind == VIOLATION_LOST);
+    CHECK(rep.items[1].kind == VIOLATION_PHANTOM);
+
+    verify_report_free(&rep);
+    CHECK(rep.count == 0);
+    CHECK(rep.items == NULL);
+    return true;
+}
+
+static bool test_identities_empty_input(void) {
+    struct verify_report rep = {0};
+    CHECK(verify_identities(NULL, 0, &rep));
+    CHECK(rep.count == 0);
+
+    /* Un log sin PUT ni GET tampoco es violacion. */
+    struct log_row rows[] = {event_row(LOG_EVENT_JOIN, 1, 0)};
+    CHECK(verify_identities(rows, 1, &rep));
+    CHECK(rep.count == 0);
+
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Las dos capas juntas: CSV crudo -> log_rows_read -> verify_identities,
+ * con dos fallas inyectadas y un PUT_REJECTED que no debe contar. */
+static bool test_end_to_end_csv_to_violations(void) {
+    static const char csv[] =
+        CSV_HEADER "\n"
+        "producer,1,JOIN,1000,,,,,,,,,4321\n"
+        "producer,1,PUT,1100,1,1,1,,1100,1,0xaaaa0001,,\n"
+        "producer,2,PUT,1200,2,1,2,,1200,2,0xaaaa0002,,\n"
+        "producer,1,PUT,1300,1,2,3,,1300,3,0xaaaa0003,,\n"
+        "producer,1,PUT,1400,1,3,4,,1400,4,0xaaaa0004,,\n"   /* nunca sale */
+        "producer,1,PUT_REJECTED,1450,1,4,,,,,,,closing\n"
+        "consumer,9,GET,1500,1,1,1,1,1100,3,0xaaaa0001,1,\n"
+        "consumer,9,GET,1600,2,1,2,2,1200,2,0xaaaa0002,1,\n"
+        "consumer,8,GET,1700,2,1,2,3,1200,1,0xaaaa0002,1,\n"  /* sale 2 veces */
+        "consumer,9,GET,1800,1,2,3,4,1300,0,0xaaaa0003,1,\n"
+        "consumer,9,DRAINED,1900,,,,,,0,,,\n";
+
+    FILE *f = fmemopen((void *)csv, strlen(csv), "r");
+    CHECK(f != NULL);
+
+    struct log_row *rows = NULL;
+    size_t n = 0;
+    bool read_ok = log_rows_read(f, &rows, &n);
+    fclose(f);
+    CHECK(read_ok);
+    CHECK(n == 11);
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, n, &rep));
+    CHECK(rep.count == 2);
+
+    CHECK(rep.items[0].kind == VIOLATION_LOST);
+    CHECK(rep.items[0].producer_id == 1 && rep.items[0].sequence == 3);
+    CHECK(rep.items[1].kind == VIOLATION_DUPLICATED);
+    CHECK(rep.items[1].producer_id == 2 && rep.items[1].sequence == 1);
+    CHECK(rep.items[1].gets == 2);
+
+    verify_report_free(&rep);
+    free(rows);
+    return true;
+}
+
+/* Cada tipo tiene su mensaje, y ninguno cae en el caso desconocido. */
+static bool test_violation_kind_str(void) {
+    const enum violation_kind kinds[] = {
+        VIOLATION_LOST, VIOLATION_DUPLICATED,
+        VIOLATION_PHANTOM, VIOLATION_REPEATED_ID
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        const char *s = violation_kind_str(kinds[i]);
+        CHECK(s != NULL && s[0] != '\0');
+        CHECK(strstr(s, "desconocida") == NULL);
+    }
+    return true;
+}
+
 int main(void) {
     struct test_case tests[] = {
         {"parse_put_row", test_parse_put_row},
@@ -437,6 +682,17 @@ int main(void) {
         {"rows_read_grows_beyond_initial_capacity",
          test_rows_read_grows_beyond_initial_capacity},
         {"rows_read_rejects_split_line", test_rows_read_rejects_split_line},
+        {"identities_clean_run", test_identities_clean_run},
+        {"identities_detects_loss", test_identities_detects_loss},
+        {"identities_detects_duplicate", test_identities_detects_duplicate},
+        {"identities_detects_phantom", test_identities_detects_phantom},
+        {"identities_detects_repeated_id", test_identities_detects_repeated_id},
+        {"identities_ignores_rejected_put", test_identities_ignores_rejected_put},
+        {"identities_reports_all_sorted", test_identities_reports_all_sorted},
+        {"report_accumulates", test_report_accumulates},
+        {"identities_empty_input", test_identities_empty_input},
+        {"end_to_end_csv_to_violations", test_end_to_end_csv_to_violations},
+        {"violation_kind_str", test_violation_kind_str},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;

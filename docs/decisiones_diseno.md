@@ -1263,9 +1263,16 @@ chocaría con valores legítimos (`occupancy` vale 0 en un `DRAINED`).
 
 ### Los cuatro chequeos
 
-1. **Completitud.** Cada `PUT` con `enqueue_seq` asignado tiene
-   exactamente un `GET` con la misma identidad `(producer_id, sequence)`.
-   Cero coincidencias es una pérdida; dos o más, un duplicado.
+1. **Conservación de identidades.** Cada `PUT` con `enqueue_seq` asignado
+   tiene exactamente un `GET` con la misma identidad `(producer_id,
+   sequence)`. Cero extracciones es una pérdida; dos o más, un duplicado.
+   Al implementarlo (#7, slice 2) se agregaron dos casos que el issue no
+   nombraba: un `GET` sin `PUT` (mensaje fantasma) y dos `PUT` con la
+   misma identidad, que viola la unicidad que exige el enunciado y que de
+   otro modo pasaría inadvertida cuando también hay dos `GET`, porque los
+   conteos se cancelan. `PUT_REJECTED` se ignora: lleva identidad, pero
+   ese mensaje nunca entró al buffer y contarlo convertiría cada rechazo
+   legítimo del cierre en una pérdida.
 2. **Integridad.** En cada par emparejado, `PUT.checksum ==
    GET.checksum` y `GET.payload_ok == 1`.
 3. **FIFO.** Para cada `GET`, `enqueue_seq == dequeue_seq`. Es la forma

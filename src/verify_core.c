@@ -262,3 +262,140 @@ fail:
     *out_count = 0;
     return false;
 }
+
+/* ---- Verificación: conservación de identidades (D15, chequeo 1) ------ */
+
+/* Una inserción o una extracción, reducida a lo único que importa para
+ * este chequeo: de qué mensaje habla y en qué sentido. */
+struct id_event {
+    uint32_t producer_id;
+    uint64_t sequence;
+    bool is_get;
+};
+
+static int cmp_id_event(const void *a, const void *b) {
+    const struct id_event *x = a;
+    const struct id_event *y = b;
+
+    if (x->producer_id != y->producer_id) {
+        return x->producer_id < y->producer_id ? -1 : 1;
+    }
+    if (x->sequence != y->sequence) {
+        return x->sequence < y->sequence ? -1 : 1;
+    }
+    return (int)x->is_get - (int)y->is_get;   /* PUT antes que GET */
+}
+
+static bool report_push(struct verify_report *rep, enum violation_kind kind,
+                        uint32_t producer_id, uint64_t sequence,
+                        uint64_t gets) {
+    if (rep->count == rep->cap) {
+        size_t new_cap = rep->cap ? rep->cap * 2 : 16;
+        struct violation *grown = realloc(rep->items,
+                                          new_cap * sizeof(*grown));
+        if (!grown) {
+            return false;
+        }
+        rep->items = grown;
+        rep->cap = new_cap;
+    }
+
+    rep->items[rep->count].kind = kind;
+    rep->items[rep->count].producer_id = producer_id;
+    rep->items[rep->count].sequence = sequence;
+    rep->items[rep->count].gets = gets;
+    rep->count++;
+    return true;
+}
+
+void verify_report_free(struct verify_report *rep) {
+    assert(rep != NULL);
+    free(rep->items);
+    rep->items = NULL;
+    rep->count = 0;
+    rep->cap = 0;
+}
+
+const char *violation_kind_str(enum violation_kind kind) {
+    switch (kind) {
+    case VIOLATION_LOST:        return "mensaje perdido: insertado y nunca extraido";
+    case VIOLATION_DUPLICATED:  return "mensaje duplicado: extraido mas de una vez";
+    case VIOLATION_PHANTOM:     return "mensaje fantasma: extraido sin haber sido insertado";
+    case VIOLATION_REPEATED_ID: return "identidad repetida: insertado dos veces con el mismo (producer_id, sequence)";
+    }
+    return "violacion desconocida";
+}
+
+bool verify_identities(const struct log_row *rows, size_t n,
+                       struct verify_report *rep) {
+    assert(rows != NULL || n == 0);
+    assert(rep != NULL);
+
+    size_t total = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].event == LOG_EVENT_PUT || rows[i].event == LOG_EVENT_GET) {
+            total++;
+        }
+    }
+    if (total == 0) {
+        return true;
+    }
+
+    struct id_event *ev = malloc(total * sizeof(*ev));
+    if (!ev) {
+        return false;
+    }
+
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].event != LOG_EVENT_PUT && rows[i].event != LOG_EVENT_GET) {
+            continue;
+        }
+        ev[k].producer_id = rows[i].producer_id;
+        ev[k].sequence = rows[i].sequence;
+        ev[k].is_get = (rows[i].event == LOG_EVENT_GET);
+        k++;
+    }
+
+    /* Ordenar agrupa las dos puntas de cada mensaje sin necesidad de una
+     * tabla hash, y de paso fija el orden del reporte. */
+    qsort(ev, total, sizeof(*ev), cmp_id_event);
+
+    bool ok = true;
+    size_t i = 0;
+    while (i < total && ok) {
+        uint64_t puts = 0, gets = 0;
+        size_t j = i;
+        while (j < total && ev[j].producer_id == ev[i].producer_id
+                         && ev[j].sequence == ev[i].sequence) {
+            if (ev[j].is_get) {
+                gets++;
+            } else {
+                puts++;
+            }
+            j++;
+        }
+
+        /* Una identidad produce a lo sumo una violación, la más cercana a
+         * la causa: si el productor emitió dos veces la misma, eso explica
+         * cualquier descuadre posterior en las extracciones. */
+        if (puts >= 2) {
+            ok = report_push(rep, VIOLATION_REPEATED_ID, ev[i].producer_id,
+                             ev[i].sequence, gets);
+        } else if (puts == 0) {
+            ok = report_push(rep, VIOLATION_PHANTOM, ev[i].producer_id,
+                             ev[i].sequence, gets);
+        } else if (gets == 0) {
+            ok = report_push(rep, VIOLATION_LOST, ev[i].producer_id,
+                             ev[i].sequence, 0);
+        } else if (gets >= 2) {
+            ok = report_push(rep, VIOLATION_DUPLICATED, ev[i].producer_id,
+                             ev[i].sequence, gets);
+        }
+
+        i = j;
+    }
+
+    free(ev);
+    return ok;
+}
