@@ -1,7 +1,11 @@
 # Makefile inicial del Proyecto 2 (MC6004).
 # Se completa a medida que se agregan módulos; ver docs/decisiones_diseno.md.
 
-CC       ?= gcc
+# make predefine CC = cc, así que `CC ?= gcc` nunca tendría efecto. Se usa
+# gcc salvo que el usuario elija otro (make CC=clang o variable de entorno).
+ifeq ($(origin CC),default)
+CC       := gcc
+endif
 CPPFLAGS := -Iinclude -D_POSIX_C_SOURCE=200809L
 CFLAGS   := -std=c17 -Wall -Wextra -Wpedantic -Werror -pthread
 LDFLAGS  := -pthread
