@@ -1181,3 +1181,120 @@ El id duplicado y la instancia inexistente, que también son casos de
   corta y más fácil de probar.
 - **Valores por defecto para `--mean-ms` y `--seed`:** harían que una
   corrida olvide su semilla sin que nadie lo note.
+
+---
+
+## D16 — Verificador de los CSV (`include/verify.h`)
+
+- **Fecha:** 2026-10-18
+- **Issue:** [#7](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/7)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+D12 fija el formato de los CSV y enumera, al final, lo que ese formato
+*permite* verificar. Esta entrada define la herramienta que efectivamente
+lo verifica, que es el issue #7.
+
+El problema de fondo: con 32 productores y 32 consumidores (el caso de
+estrés de #20), una condición de carrera puede perder, duplicar o
+desordenar un mensaje entre miles sin que nada se caiga ni se note en la
+salida por pantalla. Las pruebas de integración de #20 necesitan un
+oráculo que decida "esta corrida fue correcta" de forma automática; sin
+él solo podrían afirmar "no crasheó". Por eso #7 bloquea a #20.
+
+### Forma de la herramienta
+
+Un ejecutable `verify` que recibe N rutas de CSV de cualquier rol y los
+cruza como un solo conjunto de eventos:
+
+```text
+./verify resultados/prod1.csv resultados/cons1.csv resultados/fin.csv
+```
+
+Sale con 0 si la corrida es correcta y distinto de 0 si encuentra una
+violación, indicando cuál. Reporta **todas** las violaciones que encuentra,
+no solo la primera: mismo criterio que `CHECK()` en `tests/test_util.h`, y
+por la misma razón — al depurar una corrida fallida interesa el panorama
+completo, no el primer síntoma.
+
+El código se parte en dos para poder probarlo sin lanzar procesos:
+
+- `src/verify_core.c` — parseo y chequeos, sin escribir a consola.
+- `src/verify.c` — `main` delgado: abre los archivos, llama al núcleo,
+  imprime el reporte y traduce el resultado a código de salida.
+
+Así `tests/test_verify.c` ejercita la lógica con CSV en memoria
+(`fmemopen`), sin tocar disco, igual que el resto de la suite.
+
+### Política de parseo: rechazar antes que aceptar a medias
+
+Un CSV ya escrito es una frontera del sistema: puede venir de un proceso
+que murió a la mitad, de un disco lleno o de una edición a mano. Como la
+herramienta existe justamente para detectar datos alterados, el parseo es
+estricto y rechaza la fila completa ante cualquier duda, en vez de
+quedarse con una versión parcial. Se rechaza:
+
+- Un número de columnas distinto de 13 — incluida una coma dentro de
+  `detail`, el único campo de texto libre. D12 garantiza que ningún campo
+  lleva comas; si ese invariante se rompiera, la fila se rechaza en lugar
+  de desalinear las columnas siguientes.
+- Números con signo o con basura alrededor. `strtoull("-1")` devuelve
+  `ULONG_MAX` **sin** marcar `ERANGE`, así que el signo se corta antes de
+  convertir. Ninguna columna de D12 es negativa.
+- Valores que no entran en el tipo de su columna (`uint32_t`) o que
+  desbordan `uint64_t` (`ERANGE`).
+- Un `detail` de 48 caracteres o más (`LOG_DETAIL_MAX`). Truncarlo sería
+  alterar el dato en silencio; el valor más largo que define D12
+  (`already_closing`) mide 15.
+- Una línea que no entra en `LOG_LINE_MAX` (512 bytes, contra ~100 de una
+  fila real). Este caso es el más traicionero: `fgets` entrega el resto en
+  la llamada siguiente, y si los dos pedazos parsean, el verificador
+  cuenta una fila que nunca se escribió. Se reprodujo con un archivo de
+  una sola línea de datos que producía dos filas, la segunda inventada.
+- Un error de lectura a mitad de archivo (`ferror`), que de otro modo se
+  confunde con fin de archivo y daría por bueno un log incompleto.
+
+Un campo que D12 marca como "no aplica a este evento" llega vacío y queda
+en `0` (numéricos) o `""` (`detail`). No hay valores centinela: decidir
+qué columna importa para cada `event` es trabajo de los chequeos, no del
+parseo. Esto mantiene el parser simple y evita inventar un "ausente" que
+chocaría con valores legítimos (`occupancy` vale 0 en un `DRAINED`).
+
+### Los cuatro chequeos
+
+1. **Completitud.** Cada `PUT` con `enqueue_seq` asignado tiene
+   exactamente un `GET` con la misma identidad `(producer_id, sequence)`.
+   Cero coincidencias es una pérdida; dos o más, un duplicado.
+2. **Integridad.** En cada par emparejado, `PUT.checksum ==
+   GET.checksum` y `GET.payload_ok == 1`.
+3. **FIFO.** Para cada `GET`, `enqueue_seq == dequeue_seq`. Es la forma
+   más fuerte y más simple de lo que D12 enuncia como "ordenar los `GET`
+   por `dequeue_seq` y ver que `enqueue_seq` crece sin huecos": como hay
+   una sola cola, el mensaje extraído k-ésimo tiene que ser exactamente el
+   insertado k-ésimo.
+4. **Corte y cierre.** Ningún `PUT` con `enqueue_seq` mayor al que reporta
+   el evento `CLOSING`, y al final aceptados == extraídos.
+
+### Alternativas descartadas
+
+- **Un script en Python o AWK.** Más corto de escribir, pero agrega una
+  dependencia de runtime a la hora de evaluar y se aparta del resto del
+  entregable, que es C con su propia convención de pruebas.
+- **Verificar en vivo dentro del consumidor.** Mezclaría la herramienta de
+  medición con lo medido (y su costo entraría en las latencias), y no
+  podría cruzar eventos de procesos distintos.
+- **Un parser CSV general, con comillas y escapes.** D12 ya garantiza que
+  ningún campo lleva comas. Un parser tolerante escondería un logger roto
+  en vez de delatarlo, que es lo contrario de lo que se busca acá.
+
+### Limitaciones documentadas
+
+- Una fila malformada invalida el archivo entero y no se indica en qué
+  línea. Para un archivo de 10 000 filas con una corrupta es un
+  diagnóstico pobre; se resuelve al agregar la CLI, que es la que tiene el
+  nombre del archivo para reportar "archivo X, línea N".
+- Las ramas de `ferror` y de falla de `realloc` no tienen prueba
+  automatizada: forzarlas requiere inyectar fallos de E/S o de memoria, y
+  los trucos portables para lograrlo no se comportan igual en Linux y en
+  macOS.
