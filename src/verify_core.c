@@ -1,0 +1,264 @@
+/* verify_core.c — parseo de los CSV de D12 a struct log_row (Issue #7,
+ * slice 1). La lógica de cruce/verificación llega en slices siguientes.
+ */
+#include "verify.h"
+
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define LOG_FIELD_COUNT 13u
+
+/* Corta buf en 13 campos separándolos por ',', escribiendo '\0' en cada
+ * coma (igual que strtok, pero sin saltarse campos vacíos: "a,,c" da
+ * {"a", "", "c"}). false si no hay exactamente 13 columnas. */
+static bool split_fields(char *buf, char *field[LOG_FIELD_COUNT]) {
+    char *p = buf;
+    for (unsigned i = 0; i < LOG_FIELD_COUNT; i++) {
+        field[i] = p;
+        char *comma = strchr(p, ',');
+        if (i < LOG_FIELD_COUNT - 1) {
+            if (comma == NULL) {
+                return false;   /* menos de 13 columnas */
+            }
+            *comma = '\0';
+            p = comma + 1;
+        } else if (comma != NULL) {
+            return false;   /* coma extra: mas de 13 columnas */
+        }
+    }
+    return true;
+}
+
+static bool role_from_str(const char *s, enum log_role *out) {
+    if (strcmp(s, "producer") == 0) {
+        *out = LOG_ROLE_PRODUCER;
+    } else if (strcmp(s, "consumer") == 0) {
+        *out = LOG_ROLE_CONSUMER;
+    } else if (strcmp(s, "finisher") == 0) {
+        *out = LOG_ROLE_FINISHER;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool event_from_str(const char *s, enum log_event *out) {
+    static const struct { const char *name; enum log_event ev; } table[] = {
+        {"JOIN", LOG_EVENT_JOIN},
+        {"JOIN_REJECTED", LOG_EVENT_JOIN_REJECTED},
+        {"PUT", LOG_EVENT_PUT},
+        {"PUT_REJECTED", LOG_EVENT_PUT_REJECTED},
+        {"GET", LOG_EVENT_GET},
+        {"PROCESSED", LOG_EVENT_PROCESSED},
+        {"DRAINED", LOG_EVENT_DRAINED},
+        {"LEAVE", LOG_EVENT_LEAVE},
+        {"CLOSE_REQUEST", LOG_EVENT_CLOSE_REQUEST},
+        {"CLOSE_REJECTED", LOG_EVENT_CLOSE_REJECTED},
+        {"CLOSING", LOG_EVENT_CLOSING},
+        {"ALL_LEFT", LOG_EVENT_ALL_LEFT},
+        {"CLOSED", LOG_EVENT_CLOSED},
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        if (strcmp(s, table[i].name) == 0) {
+            *out = table[i].ev;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Campo numérico opcional: vacío -> *out = 0. Rechaza signo, espacios y
+ * texto no numérico (incluye desbordar el tipo destino). */
+static bool parse_u64(const char *tok, uint64_t *out) {
+    if (tok[0] == '\0') {
+        *out = 0;
+        return true;
+    }
+    if (!isdigit((unsigned char)tok[0])) {
+        return false;
+    }
+    char *end;
+    errno = 0;
+    unsigned long long v = strtoull(tok, &end, 10);
+    if (*end != '\0' || errno == ERANGE) {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
+static bool parse_u32(const char *tok, uint32_t *out) {
+    uint64_t v;
+    if (!parse_u64(tok, &v) || v > UINT32_MAX) {
+        return false;
+    }
+    *out = (uint32_t)v;
+    return true;
+}
+
+/* Igual que parse_u64/u32 pero el campo es obligatorio: vacío es inválido
+ * (role, id, event y t_ns siempre van en toda fila, por D12). */
+static bool parse_u32_required(const char *tok, uint32_t *out) {
+    return tok[0] != '\0' && parse_u32(tok, out);
+}
+
+static bool parse_u64_required(const char *tok, uint64_t *out) {
+    return tok[0] != '\0' && parse_u64(tok, out);
+}
+
+/* checksum: vacío -> 0; si no, "0x" + hex (strtoul con base 16 acepta el
+ * prefijo solo). */
+static bool parse_hex_u32(const char *tok, uint32_t *out) {
+    if (tok[0] == '\0') {
+        *out = 0;
+        return true;
+    }
+    /* Mismo corte que parse_u64: strtoul acepta un signo delante y
+     * "-1" devuelve ULONG_MAX sin marcar ERANGE. Hoy el chequeo de abajo
+     * (v > UINT32_MAX) lo atrapa porque unsigned long es de 64 bits, pero
+     * donde sea de 32 pasaría como 0xffffffff. */
+    if (!isxdigit((unsigned char)tok[0])) {
+        return false;
+    }
+    char *end;
+    errno = 0;
+    unsigned long v = strtoul(tok, &end, 16);
+    if (*end != '\0' || errno == ERANGE || v > UINT32_MAX) {
+        return false;
+    }
+    *out = (uint32_t)v;
+    return true;
+}
+
+static bool parse_payload_ok(const char *tok, int *out) {
+    if (tok[0] == '\0') {
+        *out = 0;
+        return true;
+    }
+    if ((tok[0] == '0' || tok[0] == '1') && tok[1] == '\0') {
+        *out = tok[0] - '0';
+        return true;
+    }
+    return false;
+}
+
+bool log_row_parse(const char *line, struct log_row *out) {
+    assert(line != NULL && out != NULL);
+
+    size_t len = strlen(line);
+    if (len >= LOG_LINE_MAX) {
+        return false;   /* linea absurdamente larga: se rechaza, no se trunca en silencio */
+    }
+
+    char buf[LOG_LINE_MAX];
+    memcpy(buf, line, len + 1);
+
+    char *field[LOG_FIELD_COUNT];
+    if (!split_fields(buf, field)) {
+        return false;
+    }
+
+    struct log_row row = {0};
+    if (!role_from_str(field[0], &row.role)) return false;
+    if (!parse_u32_required(field[1], &row.id)) return false;
+    if (!event_from_str(field[2], &row.event)) return false;
+    if (!parse_u64_required(field[3], &row.t_ns)) return false;
+    if (!parse_u32(field[4], &row.producer_id)) return false;
+    if (!parse_u64(field[5], &row.sequence)) return false;
+    if (!parse_u64(field[6], &row.enqueue_seq)) return false;
+    if (!parse_u64(field[7], &row.dequeue_seq)) return false;
+    if (!parse_u64(field[8], &row.enqueue_time_ns)) return false;
+    if (!parse_u32(field[9], &row.occupancy)) return false;
+    if (!parse_hex_u32(field[10], &row.checksum)) return false;
+    if (!parse_payload_ok(field[11], &row.payload_ok)) return false;
+
+    /* detail es el único campo de texto libre. Si no entra, se rechaza la
+     * fila en vez de truncarla: un `detail` cortado a la mitad es dato
+     * alterado en silencio, justo lo que esta herramienta debe detectar,
+     * no producir. Los valores que define D12 no pasan de 15 caracteres. */
+    if (strlen(field[12]) >= sizeof(row.detail)) {
+        return false;
+    }
+    snprintf(row.detail, sizeof(row.detail), "%s", field[12]);
+
+    *out = row;
+    return true;
+}
+
+/* Lee una línea y le quita el '\n' (y el '\r' de un archivo CRLF).
+ * Devuelve 1 si leyó una línea, 0 en fin de archivo limpio, y -1 si hubo
+ * error de lectura o si la línea no entró completa en `buf`. Ese último
+ * caso importa: fgets devolvería el resto en la llamada siguiente, y esa
+ * cola entraría al verificador como si fuera otra fila. */
+static int read_line(FILE *f, char *buf, size_t size) {
+    if (!fgets(buf, (int)size, f)) {
+        return ferror(f) ? -1 : 0;
+    }
+
+    size_t len = strlen(buf);
+    if (len == size - 1 && buf[len - 1] != '\n') {
+        return -1;   /* no entró completa */
+    }
+    if (len > 0 && buf[len - 1] == '\n') {
+        buf[--len] = '\0';
+    }
+    if (len > 0 && buf[len - 1] == '\r') {
+        buf[--len] = '\0';
+    }
+    return 1;
+}
+
+bool log_rows_read(FILE *f, struct log_row **out_rows, size_t *out_count) {
+    assert(f != NULL && out_rows != NULL && out_count != NULL);
+    *out_rows = NULL;
+    *out_count = 0;
+
+    char line[LOG_LINE_MAX];
+    if (read_line(f, line, sizeof(line)) != 1) {
+        return false;   /* ni siquiera la cabecera */
+    }
+
+    struct log_row *rows = NULL;
+    size_t count = 0, cap = 0;
+
+    for (;;) {
+        int r = read_line(f, line, sizeof(line));
+        if (r == 0) {
+            break;      /* fin de archivo limpio */
+        }
+        if (r < 0) {
+            goto fail;  /* error de lectura o línea demasiado larga */
+        }
+        if (line[0] == '\0') {
+            continue;   /* linea vacia al final del archivo */
+        }
+
+        if (count == cap) {
+            size_t new_cap = cap ? cap * 2 : 64;
+            struct log_row *grown = realloc(rows, new_cap * sizeof(*rows));
+            if (!grown) {
+                goto fail;
+            }
+            rows = grown;
+            cap = new_cap;
+        }
+
+        if (!log_row_parse(line, &rows[count])) {
+            goto fail;
+        }
+        count++;
+    }
+
+    *out_rows = rows;
+    *out_count = count;
+    return true;
+
+fail:
+    free(rows);
+    *out_rows = NULL;
+    *out_count = 0;
+    return false;
+}
