@@ -207,11 +207,12 @@ static bool test_rows_read_from_memory(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(ok);
+    CHECK(r == LOG_READ_OK);
+    CHECK(line == 0);
     CHECK(count == 2);
     CHECK(rows[0].event == LOG_EVENT_PUT);
     CHECK(rows[1].event == LOG_EVENT_GET);
@@ -226,11 +227,12 @@ static bool test_rows_read_header_only(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(ok);
+    CHECK(r == LOG_READ_OK);
+    CHECK(line == 0);
     CHECK(count == 0);
     CHECK(rows == NULL);
     return true;
@@ -243,11 +245,12 @@ static bool test_rows_read_rejects_empty_file(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(!ok);
+    CHECK(r == LOG_READ_EMPTY);
+    CHECK(line == 0);   /* no es culpa de una linea puntual */
     CHECK(rows == NULL);
     CHECK(count == 0);
     return true;
@@ -263,11 +266,12 @@ static bool test_rows_read_rejects_malformed_row(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(!ok);
+    CHECK(r == LOG_READ_BAD_LINE);
+    CHECK(line == 3);   /* cabecera 1, fila buena 2, fila corta 3 */
     CHECK(rows == NULL);
     CHECK(count == 0);
     return true;
@@ -285,11 +289,12 @@ static bool test_rows_read_handles_crlf(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(ok);
+    CHECK(r == LOG_READ_OK);
+    CHECK(line == 0);
     CHECK(count == 2);
     CHECK(rows[0].checksum == 0x9c3a51e2u);
     CHECK(strcmp(rows[1].detail, "quota_done") == 0);   /* sin '\r' pegado */
@@ -307,11 +312,12 @@ static bool test_rows_read_skips_blank_lines(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(ok);
+    CHECK(r == LOG_READ_OK);
+    CHECK(line == 0);
     CHECK(count == 1);
     free(rows);
     return true;
@@ -329,11 +335,12 @@ static bool test_rows_read_last_row_without_newline(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(ok);
+    CHECK(r == LOG_READ_OK);
+    CHECK(line == 0);
     CHECK(count == 2);
     CHECK(rows[1].sequence == 2);
     free(rows);
@@ -357,11 +364,12 @@ static bool test_rows_read_grows_beyond_initial_capacity(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(ok);
+    CHECK(r == LOG_READ_OK);
+    CHECK(line == 0);
     CHECK(count == ROWS);
     CHECK(rows[0].sequence == 1);
     CHECK(rows[ROWS - 1].sequence == ROWS);   /* sobrevivio al realloc */
@@ -405,11 +413,12 @@ static bool test_rows_read_rejects_split_line(void) {
     CHECK(f != NULL);
 
     struct log_row *rows = NULL;
-    size_t count = 0;
-    bool ok = log_rows_read(f, &rows, &count);
+    size_t count = 0, line = 0;
+    enum log_read_result r = log_rows_read(f, &rows, &count, &line);
     fclose(f);
 
-    CHECK(!ok);
+    CHECK(r == LOG_READ_BAD_LINE);
+    CHECK(line == 2);   /* la fila que no entra en el buffer */
     CHECK(rows == NULL);
     CHECK(count == 0);
     return true;
@@ -626,9 +635,10 @@ static bool test_end_to_end_csv_to_violations(void) {
 
     struct log_row *rows = NULL;
     size_t n = 0;
-    bool read_ok = log_rows_read(f, &rows, &n);
+    size_t bad_line = 0;
+    enum log_read_result rr = log_rows_read(f, &rows, &n, &bad_line);
     fclose(f);
-    CHECK(read_ok);
+    CHECK(rr == LOG_READ_OK);
     CHECK(n == 11);
 
     struct verify_report rep = {0};
@@ -827,9 +837,10 @@ static bool test_end_to_end_three_checks(void) {
     CHECK(f != NULL);
     struct log_row *rows = NULL;
     size_t n = 0;
-    bool read_ok = log_rows_read(f, &rows, &n);
+    size_t bad_line = 0;
+    enum log_read_result rr = log_rows_read(f, &rows, &n, &bad_line);
     fclose(f);
-    CHECK(read_ok);
+    CHECK(rr == LOG_READ_OK);
     CHECK(n == 8);
 
     struct verify_report rep = {0};

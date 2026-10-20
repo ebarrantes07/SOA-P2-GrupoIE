@@ -188,19 +188,21 @@ bool log_row_parse(const char *line, struct log_row *out) {
     return true;
 }
 
-/* Lee una línea y le quita el '\n' (y el '\r' de un archivo CRLF).
- * Devuelve 1 si leyó una línea, 0 en fin de archivo limpio, y -1 si hubo
- * error de lectura o si la línea no entró completa en `buf`. Ese último
- * caso importa: fgets devolvería el resto en la llamada siguiente, y esa
- * cola entraría al verificador como si fuera otra fila. */
-static int read_line(FILE *f, char *buf, size_t size) {
+/* Lee una línea y le quita el '\n' (y el '\r' de un archivo CRLF). La
+ * línea demasiado larga se distingue del error de lectura porque la CLI
+ * las reporta distinto; importa atraparla porque fgets devolvería el
+ * resto en la llamada siguiente y esa cola entraría al verificador como
+ * si fuera otra fila. */
+enum read_line_result { RL_OK, RL_EOF, RL_TOO_LONG, RL_IO_ERROR };
+
+static enum read_line_result read_line(FILE *f, char *buf, size_t size) {
     if (!fgets(buf, (int)size, f)) {
-        return ferror(f) ? -1 : 0;
+        return ferror(f) ? RL_IO_ERROR : RL_EOF;
     }
 
     size_t len = strlen(buf);
     if (len == size - 1 && buf[len - 1] != '\n') {
-        return -1;   /* no entró completa */
+        return RL_TOO_LONG;
     }
     if (len > 0 && buf[len - 1] == '\n') {
         buf[--len] = '\0';
@@ -208,38 +210,71 @@ static int read_line(FILE *f, char *buf, size_t size) {
     if (len > 0 && buf[len - 1] == '\r') {
         buf[--len] = '\0';
     }
-    return 1;
+    return RL_OK;
 }
 
-bool log_rows_read(FILE *f, struct log_row **out_rows, size_t *out_count) {
+const char *log_read_result_str(enum log_read_result r) {
+    switch (r) {
+    case LOG_READ_OK:        return "ok";
+    case LOG_READ_EMPTY:     return "el archivo esta vacio: no tiene ni la cabecera";
+    case LOG_READ_BAD_LINE:  return "fila que no cumple el formato de D12, o demasiado larga";
+    case LOG_READ_IO_ERROR:  return "error de lectura";
+    case LOG_READ_NO_MEMORY: return "sin memoria";
+    }
+    return "resultado desconocido";
+}
+
+enum log_read_result log_rows_read(FILE *f, struct log_row **out_rows,
+                                   size_t *out_count, size_t *out_line) {
     assert(f != NULL && out_rows != NULL && out_count != NULL);
+    assert(out_line != NULL);
+
     *out_rows = NULL;
     *out_count = 0;
-
-    char line[LOG_LINE_MAX];
-    if (read_line(f, line, sizeof(line)) != 1) {
-        return false;   /* ni siquiera la cabecera */
-    }
+    *out_line = 0;
 
     struct log_row *rows = NULL;
     size_t count = 0, cap = 0;
+    size_t lineno = 1;              /* la cabecera es la linea 1 */
+    enum log_read_result result;
+
+    char line[LOG_LINE_MAX];
+    switch (read_line(f, line, sizeof(line))) {
+    case RL_OK:
+        break;
+    case RL_EOF:
+        return LOG_READ_EMPTY;      /* ni siquiera la cabecera */
+    case RL_TOO_LONG:
+        *out_line = lineno;
+        return LOG_READ_BAD_LINE;
+    case RL_IO_ERROR:
+        *out_line = lineno;
+        return LOG_READ_IO_ERROR;
+    }
 
     for (;;) {
-        int r = read_line(f, line, sizeof(line));
-        if (r == 0) {
-            break;      /* fin de archivo limpio */
+        lineno++;
+        enum read_line_result r = read_line(f, line, sizeof(line));
+        if (r == RL_EOF) {
+            break;                  /* fin de archivo limpio */
         }
-        if (r < 0) {
-            goto fail;  /* error de lectura o línea demasiado larga */
+        if (r == RL_TOO_LONG) {
+            result = LOG_READ_BAD_LINE;
+            goto fail;
+        }
+        if (r == RL_IO_ERROR) {
+            result = LOG_READ_IO_ERROR;
+            goto fail;
         }
         if (line[0] == '\0') {
-            continue;   /* linea vacia al final del archivo */
+            continue;               /* linea vacia al final del archivo */
         }
 
         if (count == cap) {
             size_t new_cap = cap ? cap * 2 : 64;
             struct log_row *grown = realloc(rows, new_cap * sizeof(*rows));
             if (!grown) {
+                result = LOG_READ_NO_MEMORY;
                 goto fail;
             }
             rows = grown;
@@ -247,6 +282,7 @@ bool log_rows_read(FILE *f, struct log_row **out_rows, size_t *out_count) {
         }
 
         if (!log_row_parse(line, &rows[count])) {
+            result = LOG_READ_BAD_LINE;
             goto fail;
         }
         count++;
@@ -254,13 +290,15 @@ bool log_rows_read(FILE *f, struct log_row **out_rows, size_t *out_count) {
 
     *out_rows = rows;
     *out_count = count;
-    return true;
+    return LOG_READ_OK;
 
 fail:
     free(rows);
     *out_rows = NULL;
     *out_count = 0;
-    return false;
+    /* NO_MEMORY no es culpa de una linea puntual; el resto si. */
+    *out_line = (result == LOG_READ_NO_MEMORY) ? 0 : lineno;
+    return result;
 }
 
 /* ---- Verificación: conservación de identidades (D15, chequeo 1) ------ */
@@ -313,15 +351,15 @@ void verify_report_free(struct verify_report *rep) {
 const char *violation_kind_str(enum violation_kind kind) {
     switch (kind) {
     case VIOLATION_LOST:        return "mensaje perdido: insertado y nunca extraido";
-    case VIOLATION_DUPLICATED:  return "mensaje duplicado: extraido mas de una vez";
+    case VIOLATION_DUPLICATED:  return "mensaje duplicado";
     case VIOLATION_PHANTOM:     return "mensaje fantasma: extraido sin haber sido insertado";
     case VIOLATION_REPEATED_ID: return "identidad repetida: insertado dos veces con el mismo (producer_id, sequence)";
-    case VIOLATION_ALTERED:     return "contenido alterado: el checksum al extraer no es el de al insertar";
+    case VIOLATION_ALTERED:     return "contenido alterado";
     case VIOLATION_PAYLOAD_BAD: return "contenido alterado: el consumidor marco payload_ok = 0";
-    case VIOLATION_FIFO_ORDER:  return "orden FIFO roto: extraido en una posicion distinta a la de insercion";
-    case VIOLATION_PUT_AFTER_CLOSING:    return "aceptado despues del corte: enqueue_seq mayor al que reporto CLOSING";
-    case VIOLATION_CLOSING_INCONSISTENT: return "cierre inconsistente: aceptados != extraidos + pendientes en CLOSING";
-    case VIOLATION_NOT_ALL_DRAINED:      return "cierre incompleto: el total de extracciones no iguala a los aceptados";
+    case VIOLATION_FIFO_ORDER:  return "orden FIFO roto";
+    case VIOLATION_PUT_AFTER_CLOSING:    return "aceptado despues del corte";
+    case VIOLATION_CLOSING_INCONSISTENT: return "cierre inconsistente (aceptados != extraidos + pendientes)";
+    case VIOLATION_NOT_ALL_DRAINED:      return "cierre incompleto (extracciones != aceptados)";
     }
     return "violacion desconocida";
 }

@@ -75,14 +75,33 @@ struct log_row {
  * (p. ej. que producer_id > 0): eso es de la capa de verificación. */
 bool log_row_parse(const char *line, struct log_row *out);
 
+/* Por qué falló una lectura. Es un enum y no `-errno` por la misma razón
+ * que en memory.h: los casos que el usuario necesita distinguir no se
+ * corresponden uno a uno con un errno. */
+enum log_read_result {
+    LOG_READ_OK = 0,
+    LOG_READ_EMPTY,       /* el archivo no tiene ni la línea de cabecera */
+    LOG_READ_BAD_LINE,    /* fila que no cumple D12, o que no entra en LOG_LINE_MAX */
+    LOG_READ_IO_ERROR,    /* error de lectura a mitad de archivo */
+    LOG_READ_NO_MEMORY
+};
+
+const char *log_read_result_str(enum log_read_result r);
+
 /* Lee todas las filas de datos de un CSV con cabecera (D12) ya abierto en
  * `f`. Descarta la primera línea sin validar su contenido (se asume que ya
- * es la cabecera documentada). Con éxito, deja en *out_rows un arreglo
- * malloc'eado de *out_count filas (NULL si *out_count == 0: archivo vacío
- * de datos, no es error) y devuelve true; el llamador hace free(*out_rows).
- * Con error (archivo vacío del todo, fila malformada, o memoria), deja
- * *out_rows en NULL, *out_count en 0 y devuelve false. */
-bool log_rows_read(FILE *f, struct log_row **out_rows, size_t *out_count);
+ * es la cabecera documentada). Con LOG_READ_OK, deja en *out_rows un
+ * arreglo malloc'eado de *out_count filas (NULL si *out_count == 0:
+ * archivo sin filas de datos, que no es error) y el llamador hace
+ * free(*out_rows). Con cualquier otro resultado deja *out_rows en NULL y
+ * *out_count en 0.
+ *
+ * *out_line queda con el número de línea (1 = la cabecera) donde se
+ * detectó el problema para LOG_READ_BAD_LINE y LOG_READ_IO_ERROR, y en 0
+ * cuando el problema no es de una línea puntual. Sin esto, una sola fila
+ * corrupta en un log de miles invalidaba el archivo sin decir dónde. */
+enum log_read_result log_rows_read(FILE *f, struct log_row **out_rows,
+                                   size_t *out_count, size_t *out_line);
 
 /* ---- Verificación (D15) ----------------------------------------------- */
 

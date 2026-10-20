@@ -1227,6 +1227,33 @@ El código se parte en dos para poder probarlo sin lanzar procesos:
 Así `tests/test_verify.c` ejercita la lógica con CSV en memoria
 (`fmemopen`), sin tocar disco, igual que el resto de la suite.
 
+### Códigos de salida y pruebas de la CLI (slice 4)
+
+| Código | Significado |
+|---|---|
+| 0 | sin violaciones |
+| 1 | al menos una violación |
+| 2 | no se pudo leer una entrada, o el uso es incorrecto |
+
+Separar el 1 del 2 importa: un archivo ilegible no es lo mismo que una
+corrida incorrecta, y el #20 necesita distinguirlos para no dar por
+fallada una prueba cuando lo que falló fue el arnés.
+
+`verify` agrega a `BINS` en el Makefile. No es opcional: `COMMON` es
+`src/*.c` menos los `main`, así que un `src/verify.c` fuera de `BINS`
+terminaría enlazado dentro de los demás ejecutables y de cada binario de
+prueba, con dos `main`.
+
+Las pruebas van en dos niveles. `tests/test_verify.c` prueba la lógica
+con CSV en memoria; `tests/test_verify_cli.c` corre el **binario de
+verdad** con `popen` contra los CSV de `tests/fixtures/` y verifica el
+código de salida y el texto del reporte, que son criterios de aceptación
+del issue y no se pueden comprobar llamando a las funciones. Hay un
+fixture por tipo de violación, uno correcto, uno malformado, y un par
+(`multi_productor.csv` + `multi_consumidor.csv`) que solo cuadra cuando
+se pasan los dos juntos — el caso que justifica la herramienta, ya que
+cada proceso escribe su propio archivo.
+
 ### Política de parseo: rechazar antes que aceptar a medias
 
 Un CSV ya escrito es una frontera del sistema: puede venir de un proceso
@@ -1311,10 +1338,16 @@ chocaría con valores legítimos (`occupancy` vale 0 en un `DRAINED`).
 
 ### Limitaciones documentadas
 
-- Una fila malformada invalida el archivo entero y no se indica en qué
-  línea. Para un archivo de 10 000 filas con una corrupta es un
-  diagnóstico pobre; se resuelve al agregar la CLI, que es la que tiene el
-  nombre del archivo para reportar "archivo X, línea N".
+- ~~Una fila malformada invalida el archivo entero y no se indica en qué
+  línea.~~ **Resuelto en #7, slice 4.** `log_rows_read` pasó de devolver
+  `bool` a un `enum log_read_result` (vacío, fila inválida, error de
+  lectura, sin memoria) más el número de línea, por la misma razón que
+  `memory_result` en D13: los casos que el usuario necesita distinguir no
+  se corresponden uno a uno con un `errno`. La CLI imprime
+  `verify: <archivo>, linea <N>: <motivo>`. La fila mala sigue
+  invalidando el archivo entero, que es lo correcto —seguir con filas
+  salteadas daría un veredicto sobre datos incompletos—, pero ahora dice
+  dónde está.
 - Las ramas de `ferror` y de falla de `realloc` no tienen prueba
   automatizada: forzarlas requiere inyectar fallos de E/S o de memoria, y
   los trucos portables para lograrlo no se comportan igual en Linux y en
