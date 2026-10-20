@@ -93,7 +93,10 @@ enum violation_kind {
     VIOLATION_REPEATED_ID,  /* insertado dos veces con la misma identidad */
     VIOLATION_ALTERED,      /* el checksum al extraer no es el de al insertar */
     VIOLATION_PAYLOAD_BAD,  /* el propio consumidor marcó payload_ok = 0 */
-    VIOLATION_FIFO_ORDER    /* extraído en una posición distinta a la de inserción */
+    VIOLATION_FIFO_ORDER,   /* extraído en una posición distinta a la de inserción */
+    VIOLATION_PUT_AFTER_CLOSING,    /* aceptado después del punto de corte */
+    VIOLATION_CLOSING_INCONSISTENT, /* la foto del finisher no cierra */
+    VIOLATION_NOT_ALL_DRAINED       /* al final, aceptados != extraídos */
 };
 
 /* Los campos de contexto valen 0 para los tipos que no los usan; cada uno
@@ -105,8 +108,10 @@ struct violation {
     uint64_t gets;          /* chequeo 1: extracciones halladas */
     uint32_t checksum_put;  /* chequeo 2: ALTERED */
     uint32_t checksum_get;
-    uint64_t enqueue_seq;   /* chequeo 3: FIFO_ORDER */
+    uint64_t enqueue_seq;   /* chequeo 3: FIFO_ORDER; chequeo 4: el PUT tardío */
     uint64_t dequeue_seq;
+    uint64_t expected;      /* chequeo 4: lo que decía el evento CLOSING */
+    uint64_t found;         /* chequeo 4: lo que dicen los logs */
 };
 
 /* Acumula las violaciones de todos los chequeos: cada uno agrega las
@@ -159,5 +164,20 @@ bool verify_contents(const struct log_row *rows, size_t n,
  * campo `dequeue_seq` viene vacío por definición (D12). */
 bool verify_fifo(const struct log_row *rows, size_t n,
                  struct verify_report *rep);
+
+/* Chequeo 4 de D15: corte y cierre, a partir del evento `CLOSING` del
+ * finisher, que según D12 lleva los aceptados en `enqueue_seq`, los
+ * extraídos en `dequeue_seq` y los pendientes en `occupancy`. Verifica
+ * que esa foto cierre (aceptados == extraídos + pendientes), que ningún
+ * `PUT` tenga un `enqueue_seq` mayor al corte, y que al final el total de
+ * extracciones iguale a los aceptados.
+ *
+ * Sin evento `CLOSING` no hay con qué contrastar: no reporta nada y deja
+ * *out_checked en false, para que el llamador pueda avisar que el cierre
+ * quedó sin verificar en vez de darlo por bueno. Si hubiera más de un
+ * `CLOSING` usa el primero; detectar esa repetición es del protocolo de
+ * cierre, no de este chequeo. */
+bool verify_closing(const struct log_row *rows, size_t n,
+                    struct verify_report *rep, bool *out_checked);
 
 #endif /* SOA_P2_VERIFY_H */

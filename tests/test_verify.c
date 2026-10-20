@@ -856,12 +856,146 @@ static bool test_end_to_end_three_checks(void) {
     return true;
 }
 
+/* ---- Corte y cierre (D15, chequeo 4) -------------------------------- */
+
+/* D12: el evento CLOSING lleva aceptados en enqueue_seq, extraidos en
+ * dequeue_seq y pendientes en occupancy. */
+static struct log_row closing_row(uint64_t accepted, uint64_t extracted,
+                                  uint32_t pending) {
+    struct log_row r = {0};
+    r.role = LOG_ROLE_FINISHER;
+    r.event = LOG_EVENT_CLOSING;
+    r.enqueue_seq = accepted;
+    r.dequeue_seq = extracted;
+    r.occupancy = pending;
+    return r;
+}
+
+static bool test_closing_clean_run(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0x1), put_full(1, 2, 2, 0x2), put_full(1, 3, 3, 0x3),
+        get_full(1, 1, 1, 1, 0x1, 1),
+        closing_row(3, 1, 2),   /* 3 aceptados = 1 extraido + 2 pendientes */
+        get_full(1, 2, 2, 2, 0x2, 1),
+        get_full(1, 3, 3, 3, 0x3, 1),
+    };
+
+    struct verify_report rep = {0};
+    bool checked = false;
+    CHECK(verify_closing(rows, sizeof(rows) / sizeof(rows[0]), &rep, &checked));
+    CHECK(checked);
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Sin CLOSING no se inventa un veredicto: avisa que no se verifico. */
+static bool test_closing_without_event(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0x1), get_full(1, 1, 1, 1, 0x1, 1),
+    };
+
+    struct verify_report rep = {0};
+    bool checked = true;
+    CHECK(verify_closing(rows, sizeof(rows) / sizeof(rows[0]), &rep, &checked));
+    CHECK(!checked);
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* La foto del finisher no cierra: 5 aceptados pero 1 + 2 ubicados. */
+static bool test_closing_detects_inconsistent_snapshot(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0x1), put_full(1, 2, 2, 0x2), put_full(1, 3, 3, 0x3),
+        put_full(1, 4, 4, 0x4), put_full(1, 5, 5, 0x5),
+        get_full(1, 1, 1, 1, 0x1, 1), get_full(1, 2, 2, 2, 0x2, 1),
+        get_full(1, 3, 3, 3, 0x3, 1), get_full(1, 4, 4, 4, 0x4, 1),
+        get_full(1, 5, 5, 5, 0x5, 1),
+        closing_row(5, 1, 2),
+    };
+
+    struct verify_report rep = {0};
+    bool checked = false;
+    CHECK(verify_closing(rows, sizeof(rows) / sizeof(rows[0]), &rep, &checked));
+    CHECK(checked);
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_CLOSING_INCONSISTENT);
+    CHECK(rep.items[0].expected == 5);
+    CHECK(rep.items[0].found == 3);   /* 1 extraido + 2 pendientes */
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Un PUT con enqueue_seq mayor al corte: el productor inserto estando ya
+ * en CLOSING. */
+static bool test_closing_detects_put_after_cut(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0x1), put_full(1, 2, 2, 0x2),
+        put_full(1, 3, 3, 0x3),   /* tardio: el corte fue en 2 */
+        get_full(1, 1, 1, 1, 0x1, 1), get_full(1, 2, 2, 2, 0x2, 1),
+        closing_row(2, 0, 2),
+    };
+
+    struct verify_report rep = {0};
+    bool checked = false;
+    CHECK(verify_closing(rows, sizeof(rows) / sizeof(rows[0]), &rep, &checked));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_PUT_AFTER_CLOSING);
+    CHECK(rep.items[0].producer_id == 1 && rep.items[0].sequence == 3);
+    CHECK(rep.items[0].enqueue_seq == 3);
+    CHECK(rep.items[0].expected == 2);   /* el corte */
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Quedo un pendiente sin drenar al final. */
+static bool test_closing_detects_not_all_drained(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0x1), put_full(1, 2, 2, 0x2), put_full(1, 3, 3, 0x3),
+        get_full(1, 1, 1, 1, 0x1, 1), get_full(1, 2, 2, 2, 0x2, 1),
+        closing_row(3, 1, 2),   /* la foto cierra, pero falta una extraccion */
+    };
+
+    struct verify_report rep = {0};
+    bool checked = false;
+    CHECK(verify_closing(rows, sizeof(rows) / sizeof(rows[0]), &rep, &checked));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_NOT_ALL_DRAINED);
+    CHECK(rep.items[0].expected == 3);
+    CHECK(rep.items[0].found == 2);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Con dos CLOSING usa el primero: si usara el segundo, sus numeros
+ * absurdos dispararian dos violaciones. */
+static bool test_closing_uses_first_event(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0x1), put_full(1, 2, 2, 0x2), put_full(1, 3, 3, 0x3),
+        get_full(1, 1, 1, 1, 0x1, 1), get_full(1, 2, 2, 2, 0x2, 1),
+        get_full(1, 3, 3, 3, 0x3, 1),
+        closing_row(3, 1, 2),
+        closing_row(99, 0, 0),
+    };
+
+    struct verify_report rep = {0};
+    bool checked = false;
+    CHECK(verify_closing(rows, sizeof(rows) / sizeof(rows[0]), &rep, &checked));
+    CHECK(checked);
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
 /* Cada tipo tiene su mensaje, y ninguno cae en el caso desconocido. */
 static bool test_violation_kind_str(void) {
     const enum violation_kind kinds[] = {
         VIOLATION_LOST, VIOLATION_DUPLICATED,
         VIOLATION_PHANTOM, VIOLATION_REPEATED_ID,
-        VIOLATION_ALTERED, VIOLATION_PAYLOAD_BAD, VIOLATION_FIFO_ORDER
+        VIOLATION_ALTERED, VIOLATION_PAYLOAD_BAD, VIOLATION_FIFO_ORDER,
+        VIOLATION_PUT_AFTER_CLOSING, VIOLATION_CLOSING_INCONSISTENT,
+        VIOLATION_NOT_ALL_DRAINED
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         const char *s = violation_kind_str(kinds[i]);
@@ -913,6 +1047,12 @@ int main(void) {
         {"fifo_detects_mismatch", test_fifo_detects_mismatch},
         {"fifo_ignores_put_rows", test_fifo_ignores_put_rows},
         {"end_to_end_three_checks", test_end_to_end_three_checks},
+        {"closing_clean_run", test_closing_clean_run},
+        {"closing_without_event", test_closing_without_event},
+        {"closing_detects_inconsistent_snapshot", test_closing_detects_inconsistent_snapshot},
+        {"closing_detects_put_after_cut", test_closing_detects_put_after_cut},
+        {"closing_detects_not_all_drained", test_closing_detects_not_all_drained},
+        {"closing_uses_first_event", test_closing_uses_first_event},
         {"violation_kind_str", test_violation_kind_str},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));

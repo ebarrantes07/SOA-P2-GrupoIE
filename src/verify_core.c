@@ -319,6 +319,9 @@ const char *violation_kind_str(enum violation_kind kind) {
     case VIOLATION_ALTERED:     return "contenido alterado: el checksum al extraer no es el de al insertar";
     case VIOLATION_PAYLOAD_BAD: return "contenido alterado: el consumidor marco payload_ok = 0";
     case VIOLATION_FIFO_ORDER:  return "orden FIFO roto: extraido en una posicion distinta a la de insercion";
+    case VIOLATION_PUT_AFTER_CLOSING:    return "aceptado despues del corte: enqueue_seq mayor al que reporto CLOSING";
+    case VIOLATION_CLOSING_INCONSISTENT: return "cierre inconsistente: aceptados != extraidos + pendientes en CLOSING";
+    case VIOLATION_NOT_ALL_DRAINED:      return "cierre incompleto: el total de extracciones no iguala a los aceptados";
     }
     return "violacion desconocida";
 }
@@ -536,4 +539,83 @@ bool verify_fifo(const struct log_row *rows, size_t n,
     }
 
     return ok;
+}
+
+/* ---- Verificación: corte y cierre (D15, chequeo 4) ------------------- */
+
+bool verify_closing(const struct log_row *rows, size_t n,
+                    struct verify_report *rep, bool *out_checked) {
+    assert(rows != NULL || n == 0);
+    assert(rep != NULL && out_checked != NULL);
+
+    *out_checked = false;
+
+    const struct log_row *closing = NULL;
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].event == LOG_EVENT_CLOSING) {
+            closing = &rows[i];
+            break;
+        }
+    }
+    if (closing == NULL) {
+        return true;   /* sin punto de corte no hay nada que contrastar */
+    }
+    *out_checked = true;
+
+    /* D12: el evento CLOSING lleva la foto del punto de corte. */
+    uint64_t accepted = closing->enqueue_seq;
+    uint64_t extracted_at_cut = closing->dequeue_seq;
+    uint64_t pending = closing->occupancy;
+
+    /* La foto tiene que cerrar sola: lo aceptado está extraído o todavía
+     * en el buffer, no hay un tercer lugar donde pueda estar. */
+    if (accepted != extracted_at_cut + pending) {
+        if (!report_push(rep, (struct violation){
+                .kind = VIOLATION_CLOSING_INCONSISTENT,
+                .expected = accepted,
+                .found = extracted_at_cut + pending,
+            })) {
+            return false;
+        }
+    }
+
+    /* Después del corte no se acepta nada más: un PUT con enqueue_seq
+     * mayor significa que el productor insertó pese a estar en CLOSING. */
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].event != LOG_EVENT_PUT) {
+            continue;
+        }
+        if (rows[i].enqueue_seq <= accepted) {
+            continue;
+        }
+        if (!report_push(rep, (struct violation){
+                .kind = VIOLATION_PUT_AFTER_CLOSING,
+                .producer_id = rows[i].producer_id,
+                .sequence = rows[i].sequence,
+                .enqueue_seq = rows[i].enqueue_seq,
+                .expected = accepted,
+            })) {
+            return false;
+        }
+    }
+
+    /* Al final, los pendientes del corte también salieron. Este conteo es
+     * global y no señala un mensaje: cuando el chequeo 1 ya reportó un
+     * duplicado o una pérdida, esto lo confirma desde los totales; cuando
+     * el chequeo 1 está limpio, delata que faltan filas de log. */
+    uint64_t gets = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].event == LOG_EVENT_GET) {
+            gets++;
+        }
+    }
+    if (gets != accepted) {
+        return report_push(rep, (struct violation){
+            .kind = VIOLATION_NOT_ALL_DRAINED,
+            .expected = accepted,
+            .found = gets,
+        });
+    }
+
+    return true;
 }

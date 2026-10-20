@@ -1285,7 +1285,17 @@ chocaría con valores legítimos (`occupancy` vale 0 en un `DRAINED`).
    una sola cola, el mensaje extraído k-ésimo tiene que ser exactamente el
    insertado k-ésimo.
 4. **Corte y cierre.** Ningún `PUT` con `enqueue_seq` mayor al que reporta
-   el evento `CLOSING`, y al final aceptados == extraídos.
+   el evento `CLOSING`, y al final aceptados == extraídos. Al
+   implementarlo (#7, slice 4) se agregó un tercer contraste: que la foto
+   del `CLOSING` cierre sola, `aceptados == extraídos + pendientes`, ya
+   que lo aceptado está extraído o todavía en el buffer y no hay un tercer
+   lugar donde pueda estar. Un `PUT` con `enqueue_seq` *igual* al corte es
+   legítimo — es el último aceptado —, así que la comparación es estricta
+   solo por encima. Sin evento `CLOSING` el chequeo no corre y lo informa,
+   en vez de dar el cierre por bueno: verificar los CSV de una corrida a
+   la que no se le pasó el log del finisher es un caso normal, no un
+   error. El conteo final es global y no señala un mensaje; cuando el
+   chequeo 1 está limpio, delata que faltan filas de log.
 
 ### Alternativas descartadas
 
