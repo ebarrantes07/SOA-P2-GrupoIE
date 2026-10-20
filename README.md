@@ -62,6 +62,22 @@ Crea e inicializa la instancia y termina con código 0 cuando ya acepta particip
 nombre es `/` seguido de 1 a 30 caracteres `[A-Za-z0-9_-]` y la capacidad va de 1 a 1024.
 Si ya existe una instancia con ese nombre, la rechaza sin modificarla (código 1).
 
+### Opciones
+
+| Opción | creator | producer | consumer | finisher | Valor |
+|---|---|---|---|---|---|
+| `--name` | ✓ | ✓ | ✓ | ✓ | `/` + 1 a 30 caracteres `[A-Za-z0-9_-]` |
+| `--capacity` | ✓ | | | | entero de 1 a 1024 |
+| `--id` | | ✓ | ✓ | | entero de 1 a 4294967295, único por rol |
+| `--mean-ms` | | ✓ | ✓ | | número de 0 a 1000 (p. ej. `5` o `2.5`); `0` desactiva las pausas |
+| `--seed` | | ✓ | ✓ | | entero de 1 a 4294967295 |
+| `--messages` | | opcional | | | cuota positiva; sin ella el productor sigue hasta el cierre |
+| `--log` | | ✓ | ✓ | opcional | ruta del CSV del proceso |
+| `--summary` | | | | ✓ | ruta del CSV de resumen |
+
+✓ = obligatoria. Cualquier argumento inválido, faltante, repetido o desconocido termina con un
+mensaje en `stderr` y código 1. `--help` muestra el uso de cada ejecutable.
+
 ## Versión entregada
 
 _Pendiente: URL, etiqueta `p2-entrega` y hash completo del commit._

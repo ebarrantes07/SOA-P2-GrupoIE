@@ -1110,3 +1110,74 @@ endif
 `$(origin CC)` vale `default` solo si el valor viene de make. Así se usa
 `gcc` por defecto y se respeta un compilador elegido por el usuario
 (`make CC=clang` o variable de entorno), que era la intención de D5.
+
+---
+
+## D15 — Análisis y validación de argumentos (`include/cli.h`)
+
+- **Fecha:** 2026-10-19
+- **Issue:** [#4](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/4)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+*"Se rechazarán nombres mal formados, identificadores duplicados, valores
+fuera de rango y errores de conversión u overflow."* Los cuatro ejecutables
+comparten opciones (`--name`, `--log`, …), así que las reglas tienen que
+ser las mismas en todos.
+
+### Decisión
+
+Un módulo `cli` con una tabla que dice, por opción, qué roles la aceptan y
+para cuáles es obligatoria:
+
+| Opción | creator | producer | consumer | finisher | Valor |
+|---|---|---|---|---|---|
+| `--name` | obligatoria | obligatoria | obligatoria | obligatoria | formato de D13 |
+| `--capacity` | obligatoria | — | — | — | entero 1..1024 |
+| `--id` | — | obligatoria | obligatoria | — | entero 1..2³²−1 |
+| `--mean-ms` | — | obligatoria | obligatoria | — | decimal en [0, 1000] |
+| `--seed` | — | obligatoria | obligatoria | — | entero 1..2³²−1 |
+| `--messages` | — | opcional | — | — | entero 1..2⁶⁴−1 |
+| `--log` | — | obligatoria | obligatoria | opcional (D12) | ruta no vacía |
+| `--summary` | — | — | — | obligatoria | ruta no vacía |
+
+`cli_parse(rol, argc, argv, &opciones, err, len)` devuelve `CLI_OK`,
+`CLI_HELP` o `CLI_ERROR` con el motivo en `err`. El ejecutable imprime
+`<rol>: <motivo>` y la línea de uso en `stderr` y sale con 1.
+
+- **`--mean-ms`, `--seed` y `--log` son obligatorias** para producer y
+  consumer: la media define el escenario, la semilla hace reproducible la
+  corrida (el experimento pide conservarlas) y cada trabajador tiene que
+  escribir su CSV. `--messages` es la única opcional: sin ella el
+  productor sigue hasta el cierre, como dice el enunciado.
+- **Enteros: solo dígitos decimales.** `strtoull` aceptaría espacios
+  iniciales, `+` y `-` (convierte `-5` en un número enorme), así que se
+  exige que todo el texto sean dígitos antes de convertir y después se
+  revisan `ERANGE`, el rango del tipo y el rango de la opción. Los ceros a
+  la izquierda se leen en decimal (`007` = 7).
+- **`--seed 0` se rechaza:** 0 es el único punto fijo de xorshift32 (#5).
+  `--id 0` también, porque D8 usa ids mayores que 0.
+- **`--mean-ms`: dígitos con parte decimal opcional** (`5`, `2.5`). Se
+  valida el formato antes de `strtod`, que aceptaría `inf`, `nan`, `1e3`,
+  `0x10`, signo y espacios. Después se exige un valor finito en [0, 1000].
+- **Un valor que empieza con `--` se toma como valor faltante:** en
+  `--log --id 3`, falta el valor de `--log`. Ninguna opción legítima
+  empieza con `--`, y los números negativos empiezan con un solo `-`.
+- **Opción desconocida, repetida o que no aplica al rol:** error. Ningún
+  ejecutable ignora argumentos.
+- **El módulo no abre archivos ni toca la instancia:** un rechazo nunca
+  deja recursos a medias. Abrir el CSV es del logger (#6); si la ruta no se
+  puede abrir, falla ahí.
+
+El id duplicado y la instancia inexistente, que también son casos de
+"Validación", no son de la CLI: se detectan al conectarse
+(`participant_register`, `memory_open`) y se prueban en #19.
+
+### Alternativas descartadas
+
+- **`getopt_long`:** es una extensión GNU, no POSIX, y no evita escribir
+  los conversores estrictos. Con ocho opciones, la tabla propia es más
+  corta y más fácil de probar.
+- **Valores por defecto para `--mean-ms` y `--seed`:** harían que una
+  corrida olvide su semilla sin que nadie lo note.
