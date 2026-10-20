@@ -646,11 +646,222 @@ static bool test_end_to_end_csv_to_violations(void) {
     return true;
 }
 
+/* ---- Contenido y orden (D15, chequeos 2 y 3) ------------------------- */
+
+static struct log_row put_full(uint32_t pid, uint64_t seq, uint64_t enq,
+                               uint32_t checksum) {
+    struct log_row r = put_row(pid, seq);
+    r.enqueue_seq = enq;
+    r.checksum = checksum;
+    return r;
+}
+
+static struct log_row get_full(uint32_t pid, uint64_t seq, uint64_t enq,
+                               uint64_t deq, uint32_t checksum,
+                               int payload_ok) {
+    struct log_row r = get_row(pid, seq);
+    r.enqueue_seq = enq;
+    r.dequeue_seq = deq;
+    r.checksum = checksum;
+    r.payload_ok = payload_ok;
+    return r;
+}
+
+static bool test_contents_clean_run(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0xaaaa1111), put_full(1, 2, 2, 0xaaaa2222),
+        get_full(1, 1, 1, 1, 0xaaaa1111, 1),
+        get_full(1, 2, 2, 2, 0xaaaa2222, 1),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_contents(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_contents_detects_altered_checksum(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0xaaaa1111),
+        get_full(1, 1, 1, 1, 0xdead0000, 1),   /* salio con otro checksum */
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_contents(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_ALTERED);
+    CHECK(rep.items[0].producer_id == 1 && rep.items[0].sequence == 1);
+    CHECK(rep.items[0].checksum_put == 0xaaaa1111);
+    CHECK(rep.items[0].checksum_get == 0xdead0000);
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_contents_detects_payload_bad(void) {
+    struct log_row rows[] = {
+        put_full(2, 5, 1, 0xaaaa1111),
+        get_full(2, 5, 1, 1, 0xaaaa1111, 0),   /* el consumidor lo marco */
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_contents(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_PAYLOAD_BAD);
+    CHECK(rep.items[0].producer_id == 2 && rep.items[0].sequence == 5);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Son dos hechos distintos y se reportan los dos: el consumidor detecto
+ * contenido inconsistente, y ademas el checksum no es el del productor. */
+static bool test_contents_reports_both_for_one_get(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0xaaaa1111),
+        get_full(1, 1, 1, 1, 0xdead0000, 0),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_contents(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 2);
+    CHECK(rep.items[0].kind == VIOLATION_PAYLOAD_BAD);
+    CHECK(rep.items[1].kind == VIOLATION_ALTERED);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Un GET sin PUT ya lo reporta el chequeo 1 como fantasma; este no lo
+ * cuenta de nuevo. */
+static bool test_contents_ignores_phantom_get(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0xaaaa1111),
+        get_full(1, 1, 1, 1, 0xaaaa1111, 1),
+        get_full(7, 7, 7, 7, 0xffffffff, 1),   /* nadie lo inserto */
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_contents(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_contents_without_puts(void) {
+    struct verify_report rep = {0};
+    CHECK(verify_contents(NULL, 0, &rep));
+    CHECK(rep.count == 0);
+
+    /* Solo GET, ningun PUT: no hay indice contra el cual comparar, pero
+     * payload_ok se sigue mirando. */
+    struct log_row rows[] = {get_full(1, 1, 1, 1, 0xaaaa1111, 0)};
+    CHECK(verify_contents(rows, 1, &rep));
+    CHECK(rep.count == 1);
+    CHECK(rep.items[0].kind == VIOLATION_PAYLOAD_BAD);
+
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_fifo_clean_run(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0xaaaa1111), put_full(2, 1, 2, 0xaaaa2222),
+        get_full(1, 1, 1, 1, 0xaaaa1111, 1),
+        get_full(2, 1, 2, 2, 0xaaaa2222, 1),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_fifo(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+static bool test_fifo_detects_mismatch(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0xaaaa1111), put_full(1, 2, 2, 0xaaaa2222),
+        get_full(1, 2, 2, 1, 0xaaaa2222, 1),   /* se adelanto: insertado 2o, extraido 1o */
+        get_full(1, 1, 1, 2, 0xaaaa1111, 1),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_fifo(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 2);
+    CHECK(rep.items[0].kind == VIOLATION_FIFO_ORDER);
+    CHECK(rep.items[0].sequence == 2);
+    CHECK(rep.items[0].enqueue_seq == 2 && rep.items[0].dequeue_seq == 1);
+    CHECK(rep.items[1].enqueue_seq == 1 && rep.items[1].dequeue_seq == 2);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* En un PUT, dequeue_seq viene vacio (0) y enqueue_seq no: si el chequeo
+ * no filtrara por evento, toda insercion seria una violacion. */
+static bool test_fifo_ignores_put_rows(void) {
+    struct log_row rows[] = {
+        put_full(1, 1, 1, 0xaaaa1111),
+        put_full(1, 2, 2, 0xaaaa2222),
+        put_full(1, 3, 3, 0xaaaa3333),
+    };
+
+    struct verify_report rep = {0};
+    CHECK(verify_fifo(rows, sizeof(rows) / sizeof(rows[0]), &rep));
+    CHECK(rep.count == 0);
+    verify_report_free(&rep);
+    return true;
+}
+
+/* Los tres chequeos sobre un mismo CSV, con un problema de cada tipo. */
+static bool test_end_to_end_three_checks(void) {
+    static const char csv[] =
+        CSV_HEADER "\n"
+        "producer,1,PUT,1100,1,1,1,,1100,1,0x1111,,\n"
+        "producer,1,PUT,1200,1,2,2,,1200,2,0x2222,,\n"
+        "producer,1,PUT,1300,1,3,3,,1300,3,0x3333,,\n"
+        "producer,1,PUT,1400,1,4,4,,1400,4,0x4444,,\n"
+        "consumer,9,GET,1500,1,1,1,1,1100,3,0x1111,1,\n"   /* limpio */
+        "consumer,9,GET,1600,1,2,2,2,1200,2,0xbeef,1,\n"   /* checksum alterado */
+        "consumer,9,GET,1700,1,3,3,3,1300,1,0x3333,0,\n"   /* payload_ok = 0 */
+        "consumer,9,GET,1800,1,4,4,9,1400,0,0x4444,1,\n";  /* FIFO roto */
+
+    FILE *f = fmemopen((void *)csv, strlen(csv), "r");
+    CHECK(f != NULL);
+    struct log_row *rows = NULL;
+    size_t n = 0;
+    bool read_ok = log_rows_read(f, &rows, &n);
+    fclose(f);
+    CHECK(read_ok);
+    CHECK(n == 8);
+
+    struct verify_report rep = {0};
+    CHECK(verify_identities(rows, n, &rep));
+    CHECK(rep.count == 0);   /* las 4 identidades se conservan */
+
+    CHECK(verify_contents(rows, n, &rep));
+    CHECK(rep.count == 2);
+    CHECK(rep.items[0].kind == VIOLATION_ALTERED);
+    CHECK(rep.items[0].sequence == 2);
+    CHECK(rep.items[0].checksum_put == 0x2222 &&
+          rep.items[0].checksum_get == 0xbeef);
+    CHECK(rep.items[1].kind == VIOLATION_PAYLOAD_BAD);
+    CHECK(rep.items[1].sequence == 3);
+
+    CHECK(verify_fifo(rows, n, &rep));
+    CHECK(rep.count == 3);
+    CHECK(rep.items[2].kind == VIOLATION_FIFO_ORDER);
+    CHECK(rep.items[2].sequence == 4);
+    CHECK(rep.items[2].enqueue_seq == 4 && rep.items[2].dequeue_seq == 9);
+
+    verify_report_free(&rep);
+    free(rows);
+    return true;
+}
+
 /* Cada tipo tiene su mensaje, y ninguno cae en el caso desconocido. */
 static bool test_violation_kind_str(void) {
     const enum violation_kind kinds[] = {
         VIOLATION_LOST, VIOLATION_DUPLICATED,
-        VIOLATION_PHANTOM, VIOLATION_REPEATED_ID
+        VIOLATION_PHANTOM, VIOLATION_REPEATED_ID,
+        VIOLATION_ALTERED, VIOLATION_PAYLOAD_BAD, VIOLATION_FIFO_ORDER
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         const char *s = violation_kind_str(kinds[i]);
@@ -692,6 +903,16 @@ int main(void) {
         {"report_accumulates", test_report_accumulates},
         {"identities_empty_input", test_identities_empty_input},
         {"end_to_end_csv_to_violations", test_end_to_end_csv_to_violations},
+        {"contents_clean_run", test_contents_clean_run},
+        {"contents_detects_altered_checksum", test_contents_detects_altered_checksum},
+        {"contents_detects_payload_bad", test_contents_detects_payload_bad},
+        {"contents_reports_both_for_one_get", test_contents_reports_both_for_one_get},
+        {"contents_ignores_phantom_get", test_contents_ignores_phantom_get},
+        {"contents_without_puts", test_contents_without_puts},
+        {"fifo_clean_run", test_fifo_clean_run},
+        {"fifo_detects_mismatch", test_fifo_detects_mismatch},
+        {"fifo_ignores_put_rows", test_fifo_ignores_put_rows},
+        {"end_to_end_three_checks", test_end_to_end_three_checks},
         {"violation_kind_str", test_violation_kind_str},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));

@@ -286,9 +286,7 @@ static int cmp_id_event(const void *a, const void *b) {
     return (int)x->is_get - (int)y->is_get;   /* PUT antes que GET */
 }
 
-static bool report_push(struct verify_report *rep, enum violation_kind kind,
-                        uint32_t producer_id, uint64_t sequence,
-                        uint64_t gets) {
+static bool report_push(struct verify_report *rep, struct violation v) {
     if (rep->count == rep->cap) {
         size_t new_cap = rep->cap ? rep->cap * 2 : 16;
         struct violation *grown = realloc(rep->items,
@@ -300,11 +298,7 @@ static bool report_push(struct verify_report *rep, enum violation_kind kind,
         rep->cap = new_cap;
     }
 
-    rep->items[rep->count].kind = kind;
-    rep->items[rep->count].producer_id = producer_id;
-    rep->items[rep->count].sequence = sequence;
-    rep->items[rep->count].gets = gets;
-    rep->count++;
+    rep->items[rep->count++] = v;
     return true;
 }
 
@@ -322,6 +316,9 @@ const char *violation_kind_str(enum violation_kind kind) {
     case VIOLATION_DUPLICATED:  return "mensaje duplicado: extraido mas de una vez";
     case VIOLATION_PHANTOM:     return "mensaje fantasma: extraido sin haber sido insertado";
     case VIOLATION_REPEATED_ID: return "identidad repetida: insertado dos veces con el mismo (producer_id, sequence)";
+    case VIOLATION_ALTERED:     return "contenido alterado: el checksum al extraer no es el de al insertar";
+    case VIOLATION_PAYLOAD_BAD: return "contenido alterado: el consumidor marco payload_ok = 0";
+    case VIOLATION_FIFO_ORDER:  return "orden FIFO roto: extraido en una posicion distinta a la de insercion";
     }
     return "violacion desconocida";
 }
@@ -379,23 +376,164 @@ bool verify_identities(const struct log_row *rows, size_t n,
         /* Una identidad produce a lo sumo una violación, la más cercana a
          * la causa: si el productor emitió dos veces la misma, eso explica
          * cualquier descuadre posterior en las extracciones. */
+        enum violation_kind kind;
+        bool bad = true;
         if (puts >= 2) {
-            ok = report_push(rep, VIOLATION_REPEATED_ID, ev[i].producer_id,
-                             ev[i].sequence, gets);
+            kind = VIOLATION_REPEATED_ID;
         } else if (puts == 0) {
-            ok = report_push(rep, VIOLATION_PHANTOM, ev[i].producer_id,
-                             ev[i].sequence, gets);
+            kind = VIOLATION_PHANTOM;
         } else if (gets == 0) {
-            ok = report_push(rep, VIOLATION_LOST, ev[i].producer_id,
-                             ev[i].sequence, 0);
+            kind = VIOLATION_LOST;
         } else if (gets >= 2) {
-            ok = report_push(rep, VIOLATION_DUPLICATED, ev[i].producer_id,
-                             ev[i].sequence, gets);
+            kind = VIOLATION_DUPLICATED;
+        } else {
+            bad = false;
+        }
+
+        if (bad) {
+            ok = report_push(rep, (struct violation){
+                .kind = kind,
+                .producer_id = ev[i].producer_id,
+                .sequence = ev[i].sequence,
+                .gets = gets,
+            });
         }
 
         i = j;
     }
 
     free(ev);
+    return ok;
+}
+
+/* ---- Verificación: contenido y orden (D15, chequeos 2 y 3) ----------- */
+
+/* Una inserción reducida a lo que el chequeo de contenido necesita. */
+struct put_checksum {
+    uint32_t producer_id;
+    uint64_t sequence;
+    uint32_t checksum;
+};
+
+/* Compara solo la identidad: es el criterio del qsort y también la clave
+ * del bsearch, por eso ignora el checksum. */
+static int cmp_put_checksum(const void *a, const void *b) {
+    const struct put_checksum *x = a;
+    const struct put_checksum *y = b;
+
+    if (x->producer_id != y->producer_id) {
+        return x->producer_id < y->producer_id ? -1 : 1;
+    }
+    if (x->sequence != y->sequence) {
+        return x->sequence < y->sequence ? -1 : 1;
+    }
+    return 0;
+}
+
+bool verify_contents(const struct log_row *rows, size_t n,
+                     struct verify_report *rep) {
+    assert(rows != NULL || n == 0);
+    assert(rep != NULL);
+
+    size_t puts = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].event == LOG_EVENT_PUT) {
+            puts++;
+        }
+    }
+
+    struct put_checksum *index = NULL;
+    if (puts > 0) {
+        index = malloc(puts * sizeof(*index));
+        if (!index) {
+            return false;
+        }
+        size_t k = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (rows[i].event != LOG_EVENT_PUT) {
+                continue;
+            }
+            index[k].producer_id = rows[i].producer_id;
+            index[k].sequence = rows[i].sequence;
+            index[k].checksum = rows[i].checksum;
+            k++;
+        }
+        qsort(index, puts, sizeof(*index), cmp_put_checksum);
+    }
+
+    bool ok = true;
+    for (size_t i = 0; i < n && ok; i++) {
+        if (rows[i].event != LOG_EVENT_GET) {
+            continue;
+        }
+
+        /* Veredicto del propio consumidor, que recalculó fill y checksum
+         * sobre el mensaje que recibió. */
+        if (rows[i].payload_ok != 1) {
+            ok = report_push(rep, (struct violation){
+                .kind = VIOLATION_PAYLOAD_BAD,
+                .producer_id = rows[i].producer_id,
+                .sequence = rows[i].sequence,
+            });
+            if (!ok) {
+                break;
+            }
+        }
+
+        if (index == NULL) {
+            continue;
+        }
+
+        struct put_checksum key = {rows[i].producer_id, rows[i].sequence, 0};
+        /* Si la identidad se insertó dos veces (REPEATED_ID), bsearch
+         * devuelve una de las dos sin decir cuál; comparar contra esa
+         * alcanza, porque el chequeo 1 ya reportó el problema de fondo. */
+        const struct put_checksum *found = bsearch(&key, index, puts,
+                                                   sizeof(*index),
+                                                   cmp_put_checksum);
+        if (found == NULL) {
+            continue;   /* fantasma: ya lo reporta verify_identities */
+        }
+
+        if (found->checksum != rows[i].checksum) {
+            ok = report_push(rep, (struct violation){
+                .kind = VIOLATION_ALTERED,
+                .producer_id = rows[i].producer_id,
+                .sequence = rows[i].sequence,
+                .checksum_put = found->checksum,
+                .checksum_get = rows[i].checksum,
+            });
+        }
+    }
+
+    free(index);
+    return ok;
+}
+
+bool verify_fifo(const struct log_row *rows, size_t n,
+                 struct verify_report *rep) {
+    assert(rows != NULL || n == 0);
+    assert(rep != NULL);
+
+    bool ok = true;
+    for (size_t i = 0; i < n && ok; i++) {
+        /* Solo los GET: en un PUT, dequeue_seq viene vacío (D12) y
+         * compararlo contra enqueue_seq marcaría toda inserción. */
+        if (rows[i].event != LOG_EVENT_GET) {
+            continue;
+        }
+        if (rows[i].enqueue_seq == rows[i].dequeue_seq) {
+            continue;
+        }
+
+        ok = report_push(rep, (struct violation){
+            .kind = VIOLATION_FIFO_ORDER,
+            .producer_id = rows[i].producer_id,
+            .sequence = rows[i].sequence,
+            .enqueue_seq = rows[i].enqueue_seq,
+            .dequeue_seq = rows[i].dequeue_seq,
+        });
+    }
+
     return ok;
 }

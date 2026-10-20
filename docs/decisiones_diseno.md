@@ -1274,7 +1274,11 @@ chocaría con valores legítimos (`occupancy` vale 0 en un `DRAINED`).
    ese mensaje nunca entró al buffer y contarlo convertiría cada rechazo
    legítimo del cierre en una pérdida.
 2. **Integridad.** En cada par emparejado, `PUT.checksum ==
-   GET.checksum` y `GET.payload_ok == 1`.
+   GET.checksum` y `GET.payload_ok == 1`. Implementado así en #7, slice 3;
+   podría ser más estricto recalculando el checksum, ver la limitación
+   anotada abajo. Un `GET` puede producir las dos violaciones a la vez: el
+   veredicto del consumidor sobre el mensaje que recibió y la comparación
+   contra lo que registró el productor son hechos distintos.
 3. **FIFO.** Para cada `GET`, `enqueue_seq == dequeue_seq`. Es la forma
    más fuerte y más simple de lo que D12 enuncia como "ordenar los `GET`
    por `dequeue_seq` y ver que `enqueue_seq` crece sin huecos": como hay
@@ -1305,3 +1309,30 @@ chocaría con valores legítimos (`occupancy` vale 0 en un `DRAINED`).
   automatizada: forzarlas requiere inyectar fallos de E/S o de memoria, y
   los trucos portables para lograrlo no se comportan igual en Linux y en
   macOS.
+- **El chequeo de contenido no recalcula el checksum**, solo compara el
+  que registró el `PUT` contra el del `GET`. D1 lo habilita
+  explícitamente — `fill[i] = (producer_id + sequence + i) % 256` y
+  FNV-1a sobre 28 bytes hacen que el checksum sea una función pura de
+  `(producer_id, sequence)` —, y recalcularlo detectaría dos cosas más:
+  un productor que generó mal el payload desde el arranque, y un
+  consumidor con un `payload_ok` mal calculado (hoy el verificador le
+  cree).
+
+  No se hizo en #7 porque **al 2026-10-19 no existe ninguna
+  implementación del checksum en el repo**: solo están el campo en
+  `struct payload` y la especificación de D1. El plan la espera en #14
+  (`producer`, Emmanuel), que depende de #4, #5, #6, #11, #12 y #13, así
+  que llega bastante después del verificador. El criterio de #10
+  ("payload verificable (definido y documentado)") se cumplió con D1, sin
+  código.
+
+  **Lo que hay que no perder de vista:** #15 (`consumer`, Isaac) también
+  necesita recalcular `fill` y `checksum` para poder escribir la columna
+  `payload_ok` que exige D12, y sus criterios de aceptación no lo
+  mencionan. Si el productor, el consumidor y el verificador escriben
+  cada uno su FNV-1a, basta un byte de diferencia en la serialización
+  para que el verificador marque *todos* los mensajes como alterados. La
+  salida propuesta es una sola función compartida,
+  `payload_checksum(producer_id, sequence)`, en un issue chico del que
+  dependan #7 (para endurecer este chequeo), #14 y #15 — y corregir el
+  criterio de #15 para que nombre el recálculo.

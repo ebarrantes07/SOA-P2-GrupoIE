@@ -90,14 +90,23 @@ enum violation_kind {
     VIOLATION_LOST,         /* insertado y nunca extraído */
     VIOLATION_DUPLICATED,   /* extraído más de una vez */
     VIOLATION_PHANTOM,      /* extraído sin haber sido insertado */
-    VIOLATION_REPEATED_ID   /* insertado dos veces con la misma identidad */
+    VIOLATION_REPEATED_ID,  /* insertado dos veces con la misma identidad */
+    VIOLATION_ALTERED,      /* el checksum al extraer no es el de al insertar */
+    VIOLATION_PAYLOAD_BAD,  /* el propio consumidor marcó payload_ok = 0 */
+    VIOLATION_FIFO_ORDER    /* extraído en una posición distinta a la de inserción */
 };
 
+/* Los campos de contexto valen 0 para los tipos que no los usan; cada uno
+ * lo llena un solo chequeo. */
 struct violation {
     enum violation_kind kind;
     uint32_t producer_id;   /* identidad del mensaje afectado */
     uint64_t sequence;
-    uint64_t gets;          /* extracciones halladas para esa identidad */
+    uint64_t gets;          /* chequeo 1: extracciones halladas */
+    uint32_t checksum_put;  /* chequeo 2: ALTERED */
+    uint32_t checksum_get;
+    uint64_t enqueue_seq;   /* chequeo 3: FIFO_ORDER */
+    uint64_t dequeue_seq;
 };
 
 /* Acumula las violaciones de todos los chequeos: cada uno agrega las
@@ -129,5 +138,26 @@ const char *violation_kind_str(enum violation_kind kind);
  * resultado. */
 bool verify_identities(const struct log_row *rows, size_t n,
                        struct verify_report *rep);
+
+/* Chequeo 2 de D15: contenido. Por cada `GET`, exige que el consumidor no
+ * haya marcado `payload_ok = 0` y que el checksum coincida con el que
+ * registró el `PUT` de esa identidad. Un `GET` sin `PUT` se saltea: ya lo
+ * reporta verify_identities como fantasma, no tiene sentido contarlo dos
+ * veces.
+ *
+ * A diferencia del chequeo 1, un mismo `GET` puede producir dos
+ * violaciones: que el consumidor detectara contenido inconsistente y que
+ * además el checksum no sea el del productor son hechos distintos y
+ * conviene ver los dos. Las violaciones salen en el orden en que
+ * aparecen los `GET` en `rows`. */
+bool verify_contents(const struct log_row *rows, size_t n,
+                     struct verify_report *rep);
+
+/* Chequeo 3 de D15: orden FIFO. Como hay una sola cola, el mensaje
+ * extraído k-ésimo tiene que ser el insertado k-ésimo: por cada `GET`,
+ * `enqueue_seq == dequeue_seq`. Solo mira filas `GET`; en un `PUT` el
+ * campo `dequeue_seq` viene vacío por definición (D12). */
+bool verify_fifo(const struct log_row *rows, size_t n,
+                 struct verify_report *rep);
 
 #endif /* SOA_P2_VERIFY_H */
