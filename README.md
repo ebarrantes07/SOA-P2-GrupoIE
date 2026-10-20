@@ -47,6 +47,16 @@ Además se define `_POSIX_C_SOURCE=200809L` como macro de características y se 
 | `results/` | Resultados; solo se versiona `results/seleccionados/` |
 | `docs/` | Bitácora de decisiones (`decisiones_diseno.md`) e informe |
 
+## Material reutilizado
+
+El generador pseudoaleatorio `xorshift32` de `src/rng.c` (estado de 32 bits y la secuencia
+`x ^= x << 13; x ^= x >> 17; x ^= x << 5;`) se reutiliza tal cual del Proyecto 1 del mismo
+grupo, [SOA-P1-GrupoIE](https://github.com/ifmoreno-sp/SOA-P1-GrupoIE) (`src/rng.c`). Lo
+nuevo en este proyecto es el muestreo exponencial por transformada inversa
+(`rng_uniform01` y `rng_exponential_ms`), que el Proyecto 1 no tenía.
+
+El resto del código es original de este proyecto.
+
 ## Uso
 
 _Pendiente: se completa a medida que se implementan los ejecutables (interfaz mínima del
