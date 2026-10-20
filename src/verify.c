@@ -1,4 +1,4 @@
-/* verify.c — CLI del verificador de los CSV (Issue #7, D15).
+/* verify.c — CLI del verificador de los CSV (Issue #7, D16).
  *
  * Toma N archivos de cualquier rol, los cruza como un solo conjunto de
  * eventos y corre los cuatro chequeos. Acá vive toda la E/S y el formato

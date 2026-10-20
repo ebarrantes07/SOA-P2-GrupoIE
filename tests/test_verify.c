@@ -424,7 +424,7 @@ static bool test_rows_read_rejects_split_line(void) {
     return true;
 }
 
-/* ---- Conservacion de identidades (D15, chequeo 1) -------------------- */
+/* ---- Conservacion de identidades (D16, chequeo 1) -------------------- */
 
 static struct log_row put_row(uint32_t producer_id, uint64_t sequence) {
     struct log_row r = {0};
@@ -656,7 +656,7 @@ static bool test_end_to_end_csv_to_violations(void) {
     return true;
 }
 
-/* ---- Contenido y orden (D15, chequeos 2 y 3) ------------------------- */
+/* ---- Contenido y orden (D16, chequeos 2 y 3) ------------------------- */
 
 static struct log_row put_full(uint32_t pid, uint64_t seq, uint64_t enq,
                                uint32_t checksum) {
@@ -867,7 +867,7 @@ static bool test_end_to_end_three_checks(void) {
     return true;
 }
 
-/* ---- Corte y cierre (D15, chequeo 4) -------------------------------- */
+/* ---- Corte y cierre (D16, chequeo 4) -------------------------------- */
 
 /* D12: el evento CLOSING lleva aceptados en enqueue_seq, extraidos en
  * dequeue_seq y pendientes en occupancy. */

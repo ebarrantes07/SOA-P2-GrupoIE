@@ -301,7 +301,7 @@ fail:
     return result;
 }
 
-/* ---- Verificación: conservación de identidades (D15, chequeo 1) ------ */
+/* ---- Verificación: conservación de identidades (D16, chequeo 1) ------ */
 
 /* Una inserción o una extracción, reducida a lo único que importa para
  * este chequeo: de qué mensaje habla y en qué sentido. */
@@ -447,7 +447,7 @@ bool verify_identities(const struct log_row *rows, size_t n,
     return ok;
 }
 
-/* ---- Verificación: contenido y orden (D15, chequeos 2 y 3) ----------- */
+/* ---- Verificación: contenido y orden (D16, chequeos 2 y 3) ----------- */
 
 /* Una inserción reducida a lo que el chequeo de contenido necesita. */
 struct put_checksum {
@@ -579,7 +579,7 @@ bool verify_fifo(const struct log_row *rows, size_t n,
     return ok;
 }
 
-/* ---- Verificación: corte y cierre (D15, chequeo 4) ------------------- */
+/* ---- Verificación: corte y cierre (D16, chequeo 4) ------------------- */
 
 bool verify_closing(const struct log_row *rows, size_t n,
                     struct verify_report *rep, bool *out_checked) {

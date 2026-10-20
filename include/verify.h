@@ -103,7 +103,7 @@ const char *log_read_result_str(enum log_read_result r);
 enum log_read_result log_rows_read(FILE *f, struct log_row **out_rows,
                                    size_t *out_count, size_t *out_line);
 
-/* ---- Verificación (D15) ----------------------------------------------- */
+/* ---- Verificación (D16) ----------------------------------------------- */
 
 enum violation_kind {
     VIOLATION_LOST,         /* insertado y nunca extraído */
@@ -163,7 +163,7 @@ const char *violation_kind_str(enum violation_kind kind);
 bool verify_identities(const struct log_row *rows, size_t n,
                        struct verify_report *rep);
 
-/* Chequeo 2 de D15: contenido. Por cada `GET`, exige que el consumidor no
+/* Chequeo 2 de D16: contenido. Por cada `GET`, exige que el consumidor no
  * haya marcado `payload_ok = 0` y que el checksum coincida con el que
  * registró el `PUT` de esa identidad. Un `GET` sin `PUT` se saltea: ya lo
  * reporta verify_identities como fantasma, no tiene sentido contarlo dos
@@ -177,14 +177,14 @@ bool verify_identities(const struct log_row *rows, size_t n,
 bool verify_contents(const struct log_row *rows, size_t n,
                      struct verify_report *rep);
 
-/* Chequeo 3 de D15: orden FIFO. Como hay una sola cola, el mensaje
+/* Chequeo 3 de D16: orden FIFO. Como hay una sola cola, el mensaje
  * extraído k-ésimo tiene que ser el insertado k-ésimo: por cada `GET`,
  * `enqueue_seq == dequeue_seq`. Solo mira filas `GET`; en un `PUT` el
  * campo `dequeue_seq` viene vacío por definición (D12). */
 bool verify_fifo(const struct log_row *rows, size_t n,
                  struct verify_report *rep);
 
-/* Chequeo 4 de D15: corte y cierre, a partir del evento `CLOSING` del
+/* Chequeo 4 de D16: corte y cierre, a partir del evento `CLOSING` del
  * finisher, que según D12 lleva los aceptados en `enqueue_seq`, los
  * extraídos en `dequeue_seq` y los pendientes en `occupancy`. Verifica
  * que esa foto cierre (aceptados == extraídos + pendientes), que ningún
