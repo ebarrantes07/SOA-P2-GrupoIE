@@ -1,4 +1,4 @@
-/* test_logger.c — pruebas del logger CSV (D12, D16, Issue #6). Las filas
+/* test_logger.c — pruebas del logger CSV (D12, D17, Issue #6). Las filas
  * esperadas están escritas a mano a partir de la tabla de eventos de D12.
  * Los archivos temporales van en build/, que make test ya creó.
  */

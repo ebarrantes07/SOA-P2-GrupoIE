@@ -1110,3 +1110,77 @@ endif
 `$(origin CC)` vale `default` solo si el valor viene de make. Así se usa
 `gcc` por defecto y se respeta un compilador elegido por el usuario
 (`make CC=clang` o variable de entorno), que era la intención de D5.
+
+---
+
+## D17 — Logger CSV (`include/logger.h`)
+
+- **Fecha:** 2026-10-20
+- **Issue:** [#6](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/6)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+D12 fija las columnas y qué campos lleva cada evento. El enunciado pide
+*"capturar bajo protección los datos necesarios para registrar un evento y
+escribirlos después"* y *"un CSV por proceso"*. El verificador (#7) lee
+esos archivos, así que cualquier desvío de D12 lo rompe.
+
+### Decisión
+
+**Captura y escritura separadas.** `struct op_snapshot` (D3) ya trae la
+secuencia, la marca de tiempo y la ocupación tomadas bajo el mutex. Después
+de soltarlo, el proceso arma un `struct csv_record` con
+`csv_record_put` / `csv_record_get` (solo copian campos) y recién entonces
+llama a `csv_logger_write`, que hace la E/S:
+
+```c
+sync_put(inst, &msg, &snap);          /* captura bajo el mutex (D3) */
+csv_record_put(&rec, &msg, &snap);    /* copia, sin mutex */
+csv_logger_write(&lg, &rec);          /* E/S, sin mutex */
+```
+
+**El logger aplica D12 por su cuenta.** Una tabla interna dice, por evento,
+qué roles lo pueden emitir y qué columnas lleva. Quien llama llena el
+registro con lo que tiene; el logger escribe solo las columnas que D12
+define para ese evento y deja vacías las demás. Así la regla vive en un
+solo lugar y no en cada `fprintf` del producer, el consumer y el finisher.
+Un evento que no corresponde al rol (un `PUT` en el log de un consumidor)
+se rechaza con `-EINVAL` sin escribir nada.
+
+**Formato de cada campo:**
+- Enteros en decimal, `checksum` como `0x` + 8 dígitos hex en minúscula,
+  `payload_ok` como `0`/`1`.
+- `detail` se trunca a 47 caracteres (el mismo límite que lee el
+  verificador) y sus comas, saltos de línea y caracteres de control se
+  reemplazan por `_`, que romperían el CSV.
+- Cada fila se arma completa en un buffer y se escribe con un solo
+  `fwrite`, así una fila nunca queda partida entre dos escrituras.
+
+**Archivo:** `csv_logger_open` crea o trunca el archivo y escribe la
+cabecera; si falla, no queda nada abierto. Se usa el buffer de `stdio`
+(no se vacía en cada fila) para que el log cueste lo menos posible durante
+la corrida; `csv_logger_close` vacía y cierra, y reporta el error de una
+escritura diferida, que con buffer aparece recién ahí. El enunciado no
+pide conservar logs ante `SIGKILL`.
+
+**Nombres con prefijo `csv_`:** el verificador ya usa `log_row`,
+`log_event` y `log_*`. Todos los módulos de `src/` se enlazan en los mismos
+binarios (D6), así que los nombres no pueden repetirse.
+
+### Verificación cruzada con el verificador
+
+Se generó con este logger una corrida completa y coherente (productor,
+consumidor y finisher, 156 filas) y se pasó por el verificador de #7: sin
+violaciones y con el cierre verificado. Con un mensaje alterado y uno
+perdido sembrados a propósito, el verificador reportó los dos más la
+inconsistencia del cierre que provoca la pérdida.
+
+### Alternativas descartadas
+
+- **Un `fprintf` por evento en cada ejecutable:** repetiría la tabla de
+  D12 en tres lugares y un error en uno solo pasaría desapercibido hasta
+  correr el verificador.
+- **`fflush` en cada fila:** más robusto ante una caída, pero agrega una
+  llamada al sistema por evento y distorsiona el experimento. El costo de
+  los logs se discute en el informe, como pide el enunciado.

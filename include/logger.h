@@ -1,6 +1,6 @@
 /* logger.h — CSV de eventos por proceso (formato de D12).
  *
- * Decisión documentada en docs/decisiones_diseno.md (D16). El patrón de uso
+ * Decisión documentada en docs/decisiones_diseno.md (D17). El patrón de uso
  * separa captura y escritura, como pide el enunciado:
  *
  *   sync_lock / sync_put(..., &snap) / sync_unlock     <- región crítica

@@ -1,4 +1,4 @@
-/* logger.c — CSV de eventos por proceso (D12, D16).
+/* logger.c — CSV de eventos por proceso (D12, D17).
  *
  * La tabla EVENTS traduce la tabla "Eventos y campos que llevan" de D12:
  * qué roles pueden emitir cada evento y qué columnas lleva. Es la única
