@@ -1,10 +1,15 @@
-/* sync.c — capa de sincronización (D3).
+/* sync.c — capa de sincronización (D3, D18).
  *
- * Por ahora solo el ciclo de vida de las primitivas, que el creator necesita
- * en el paso 6 de D1 (Issue #9). put/get, lock/unlock y broadcast los agrega
- * el Issue #11.
+ * Unica capa que toca el mutex y las condvars. put/get siguen al pie de la
+ * letra el pseudocodigo de D3, y ademas mantienen los agregados de la
+ * instancia que D11 define (rechazos, ultima extraccion, histograma de
+ * latencia), porque son los unicos puntos del sistema que los conocen.
  */
 #include "sync.h"
+
+#include "buffer.h"
+#include "clock.h"
+#include "metrics.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -130,4 +135,94 @@ void sync_broadcast_all(struct instance *inst) {
             primitive_failed("pthread_cond_broadcast", rc);
         }
     }
+}
+
+/* Esperar y senalar siguen la misma politica que lock/unlock (D18): no
+ * tienen por donde devolver un error y un fallo aca es protocolo roto. */
+static void cond_wait_checked(pthread_cond_t *cond, pthread_mutex_t *mutex) {
+    int rc = pthread_cond_wait(cond, mutex);
+    if (rc != 0) {
+        primitive_failed("pthread_cond_wait", rc);
+    }
+}
+
+static void cond_signal_checked(pthread_cond_t *cond) {
+    int rc = pthread_cond_signal(cond);
+    if (rc != 0) {
+        primitive_failed("pthread_cond_signal", rc);
+    }
+}
+
+/* ---- Operaciones bloqueantes (D3) ------------------------------------- */
+
+enum put_result sync_put(struct instance *inst, struct message *msg,
+                         struct op_snapshot *snap) {
+    sync_lock(inst);
+
+    /* Ciclo while y no if: cond_wait puede despertar de forma espuria, y
+     * ademas otro productor puede haber vuelto a llenar el buffer entre
+     * el signal y nuestra readquisicion del mutex. */
+    while (buffer_is_full(inst) && inst->state == STATE_OPEN) {
+        cond_wait_checked(&inst->not_full, &inst->mutex);
+    }
+
+    /* El corte le gana al espacio: el productor sale apenas el estado deja
+     * de ser OPEN, aunque haya lugar libre (D3). */
+    if (inst->state != STATE_OPEN) {
+        inst->metrics.rejected_puts++;   /* no cuenta como aceptado (D11) */
+        sync_unlock(inst);
+        return PUT_REJECTED_CLOSING;
+    }
+
+    msg->enqueue_seq = ++inst->enqueue_seq;          /* el primero es 1 */
+    msg->enqueue_time_ns = now_monotonic_ns();
+    buffer_push(inst, msg);
+
+    if (snap != NULL) {
+        snap->seq = msg->enqueue_seq;
+        snap->time_ns = msg->enqueue_time_ns;
+        snap->occupancy = inst->count;
+    }
+
+    /* signal y no broadcast: un push satisface exactamente a un
+     * consumidor, y en not_empty solo duermen consumidores (D3). */
+    cond_signal_checked(&inst->not_empty);
+    sync_unlock(inst);
+    return PUT_OK;
+}
+
+enum get_result sync_get(struct instance *inst, struct message *out,
+                         struct op_snapshot *snap) {
+    sync_lock(inst);
+
+    while (buffer_is_empty(inst) && inst->state == STATE_OPEN) {
+        cond_wait_checked(&inst->not_empty, &inst->mutex);
+    }
+
+    /* Vacio al salir del ciclo implica que el estado ya no es OPEN: si lo
+     * fuera y estuviera vacio, seguiriamos dormidos. Por eso alcanza con
+     * mirar el buffer (D3). */
+    if (buffer_is_empty(inst)) {
+        sync_unlock(inst);
+        return GET_DRAINED;
+    }
+
+    uint64_t dseq = ++inst->dequeue_seq;
+    buffer_pop(inst, out);
+
+    /* La marca se toma siempre, no solo cuando hay snapshot: los
+     * agregados de D11 la necesitan igual. */
+    uint64_t now = now_monotonic_ns();
+    inst->metrics.last_dequeue_ns = now;
+    lat_hist_add(&inst->metrics.latency, now - out->enqueue_time_ns);
+
+    if (snap != NULL) {
+        snap->seq = dseq;
+        snap->time_ns = now;
+        snap->occupancy = inst->count;
+    }
+
+    cond_signal_checked(&inst->not_full);
+    sync_unlock(inst);
+    return GET_OK;
 }
