@@ -7,6 +7,9 @@
 #include "sync.h"
 
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -32,7 +35,8 @@ int sync_init_primitives(struct instance *inst) {
         return -rc;
     }
 
-    pthread_cond_t *conds[] = { &inst->not_full, &inst->not_empty, &inst->all_left };
+    pthread_cond_t *conds[] = { &inst->not_full, &inst->not_empty,
+                                &inst->closing, &inst->all_left };
     size_t nconds = sizeof(conds) / sizeof(conds[0]);
     size_t made = 0;            /* condvars ya inicializadas, para deshacer */
     bool mutex_made = false;
@@ -68,7 +72,8 @@ out:
 
 int sync_destroy_primitives(struct instance *inst) {
     int first = 0, rc;
-    pthread_cond_t *conds[] = { &inst->not_full, &inst->not_empty, &inst->all_left };
+    pthread_cond_t *conds[] = { &inst->not_full, &inst->not_empty,
+                                &inst->closing, &inst->all_left };
 
     for (size_t i = 0; i < sizeof(conds) / sizeof(conds[0]); i++)
         if ((rc = pthread_cond_destroy(conds[i])) != 0 && first == 0)
@@ -76,4 +81,53 @@ int sync_destroy_primitives(struct instance *inst) {
     if ((rc = pthread_mutex_destroy(&inst->mutex)) != 0 && first == 0)
         first = rc;
     return -first;
+}
+
+/* ---- Politica de errores de las primitivas (D18) ---------------------- */
+
+/* Un fallo de lock/unlock/wait/signal/broadcast no es una condicion que
+ * el programa pueda manejar: significa que el protocolo ya esta roto
+ * (mutex sin inicializar, unlock de un mutex ajeno, deadlock detectado).
+ * Ademas estas operaciones devuelven void, asi que no hay por donde
+ * reportar. Se aborta con el nombre de la llamada y la causa.
+ *
+ * Chequeo explicito y no assert: con -DNDEBUG el assert desaparece y el
+ * fallo pasaria en silencio, igual que en now_monotonic_ns (#34).
+ *
+ * A diferencia de clock_gettime, las funciones pthread_* NO usan errno:
+ * devuelven el codigo de error directamente, de ahi strerror(rc) y no
+ * perror(). */
+static void primitive_failed(const char *call, int rc) {
+    fprintf(stderr, "sync: %s: %s\n", call, strerror(rc));
+    abort();
+}
+
+/* ---- Exclusion mutua -------------------------------------------------- */
+
+void sync_lock(struct instance *inst) {
+    int rc = pthread_mutex_lock(&inst->mutex);
+    if (rc != 0) {
+        primitive_failed("pthread_mutex_lock", rc);
+    }
+}
+
+void sync_unlock(struct instance *inst) {
+    int rc = pthread_mutex_unlock(&inst->mutex);
+    if (rc != 0) {
+        primitive_failed("pthread_mutex_unlock", rc);
+    }
+}
+
+void sync_broadcast_all(struct instance *inst) {
+    /* Las cuatro: pasar a CLOSING vuelve falso el predicado de todos los
+     * que esperan, sea espacio, datos, la pausa o el retiro (D3). */
+    pthread_cond_t *conds[] = { &inst->not_full, &inst->not_empty,
+                                &inst->closing, &inst->all_left };
+
+    for (size_t i = 0; i < sizeof(conds) / sizeof(conds[0]); i++) {
+        int rc = pthread_cond_broadcast(conds[i]);
+        if (rc != 0) {
+            primitive_failed("pthread_cond_broadcast", rc);
+        }
+    }
 }

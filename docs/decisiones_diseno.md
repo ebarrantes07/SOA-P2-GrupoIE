@@ -1181,3 +1181,84 @@ El id duplicado y la instancia inexistente, que también son casos de
   corta y más fácil de probar.
 - **Valores por defecto para `--mean-ms` y `--seed`:** harían que una
   corrida olvide su semilla sin que nadie lo note.
+
+---
+
+## D18 — Política de errores de las primitivas y cuarta condvar
+
+- **Fecha:** 2026-10-20
+- **Issue:** [#11](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/11)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+> **Numeración:** D16 queda reservada para el verificador (PR #37) y D17
+> para el logger (PR #39), ambos abiertos al escribir esto.
+
+### Contexto
+
+`sync_lock`, `sync_unlock` y `sync_broadcast_all` devuelven `void`: no
+tienen por dónde informar un error. La revisión de #29 pidió decidir qué
+hacer cuando una primitiva falla, y dejarlo escrito.
+
+### Decisión
+
+Dos tratos distintos, según quién pueda hacer algo con el error:
+
+- **`sync_init_primitives` y `sync_destroy_primitives` devuelven `-rc`.**
+  Las llaman el creator y el finisher, que todavía pueden informar al
+  usuario y limpiar lo que crearon. Un fallo acá es una condición
+  manejable: el segmento no se publica y listo.
+- **`lock` / `unlock` / `wait` / `signal` / `broadcast` abortan**, con el
+  nombre de la llamada y la causa en `stderr`. Los errores que estas
+  primitivas pueden devolver describen un protocolo ya roto, no una
+  condición de carrera recuperable: `EINVAL` es un mutex sin inicializar,
+  `EPERM` es soltar un mutex ajeno, `EDEADLK` es un deadlock detectado.
+  Continuar después de cualquiera de los tres significa operar sobre un
+  buffer compartido cuya exclusión mutua no se sostiene, que es peor que
+  terminar.
+
+```c
+static void primitive_failed(const char *call, int rc) {
+    fprintf(stderr, "sync: %s: %s\n", call, strerror(rc));
+    abort();
+}
+```
+
+Dos detalles que es fácil equivocar:
+
+- **Chequeo explícito, no `assert`.** Con `-DNDEBUG` el `assert`
+  desaparece y el fallo pasaría en silencio. Es la misma lección del fix
+  de `now_monotonic_ns` en #34.
+- **`strerror(rc)` y no `perror`.** A diferencia de las llamadas al
+  sistema, las funciones `pthread_*` **no usan `errno`**: devuelven el
+  código de error directamente. Usar `perror` ahí imprimiría el `errno`
+  de alguna llamada anterior, sin relación con el fallo real.
+
+**Sin prueba automatizada:** forzar que `pthread_mutex_lock` falle exige
+corromper el mutex a propósito, y el comportamiento de hacerlo no está
+definido por el estándar, así que una prueba de eso verificaría una
+casualidad del sistema y no un contrato.
+
+### Cuarta condvar: `closing`
+
+`struct instance` gana una cuarta condvar, pedida también por la revisión
+de #29. Mantiene la invariante que hace correcto usar `signal` en vez de
+`broadcast` (D3): **cada condvar tiene un solo tipo de esperador con un
+mismo predicado.**
+
+| Condvar | Quién duerme | Predicado |
+|---|---|---|
+| `not_full` | productores | esperando espacio |
+| `not_empty` | consumidores | esperando mensajes |
+| `closing` | productores en pausa (#13) | esperando a que termine la pausa o el corte |
+| `all_left` | el finisher | esperando `refs == 1` |
+
+Sin ella, la pausa interrumpible de #13 tendría que dormir en `not_full`,
+y entonces un productor en pausa podría consumir el `signal` destinado a
+otro bloqueado por buffer lleno, que se quedaría dormido con espacio
+disponible. `sync_broadcast_all` despierta las cuatro.
+
+**`INSTANCE_VERSION` pasa de 1 a 2**, porque agregar la condvar cambia el
+tamaño y el layout del segmento. `memory_open` valida la versión (D13),
+así que un binario nuevo rechaza con `MEM_INCOMPATIBLE` una instancia
+creada por uno viejo, en vez de interpretar mal sus campos. Es
+exactamente para lo que existe ese campo.

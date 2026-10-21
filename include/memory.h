@@ -18,7 +18,7 @@
 #include "participants.h"
 
 #define INSTANCE_MAGIC      0xDEADBEEFu   /* arbitrario, != 0, facil de ver en un hexdump/gdb */
-#define INSTANCE_VERSION    1u
+#define INSTANCE_VERSION    2u   /* 2: cuarta condvar `closing` (D18, #11) */
 #define PAYLOAD_FILL_SIZE   16             /* ver D1, seccion "Payload: metadata + checksum" */
 
 #define INSTANCE_MIN_CAPACITY  1u
@@ -65,6 +65,7 @@ struct instance {
     pthread_mutex_t  mutex;        /* PTHREAD_PROCESS_SHARED */
     pthread_cond_t   not_full;     /* disponibilidad de espacio */
     pthread_cond_t   not_empty;    /* disponibilidad de mensajes */
+    pthread_cond_t   closing;      /* productores en pausa (#13); solo despierta al cortar */
     pthread_cond_t   all_left;     /* el finisher espera refs == 1 (solo el), ver D9 */
 
     uint32_t  head, tail, count;
