@@ -11,6 +11,7 @@
 #include "memory.h"
 #include "test_util.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -428,6 +429,170 @@ static bool test_put_blocks_and_counts_the_wait(void) {
     return true;
 }
 
+/* ---- Varios productores y consumidores reales (criterio del #11) ------ */
+
+/* TSan instrumenta hilos dentro de un proceso: no detecta carreras ENTRE
+ * procesos sobre memoria compartida, que es justo lo que hay que probar
+ * aca. Asi que la verificacion es por invariantes, que ademas son mas
+ * fuertes que lo que TSan podria decir: cada identidad extraida
+ * exactamente una vez, y el orden global intacto. */
+
+enum { PRODUCERS = 4, CONSUMERS = 4, PER_PRODUCER = 250 };
+#define TOTAL (PRODUCERS * PER_PRODUCER)
+
+/* Una casilla por mensaje posible. Los consumidores marcan con fetch_add,
+ * asi una doble extraccion se delata como un 2 en vez de perderse en una
+ * carrera entre dos procesos. */
+struct tally {
+    _Atomic unsigned seen[TOTAL];
+};
+
+static struct tally *tally_create(void) {
+    void *p = mmap(NULL, sizeof(struct tally), PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        return NULL;
+    }
+    struct tally *t = p;
+    for (size_t i = 0; i < TOTAL; i++) {
+        atomic_store(&t->seen[i], 0u);
+    }
+    return t;
+}
+
+static void run_producer(const char *name, uint32_t id) {
+    alarm(15);   /* margen 15x sobre el ~1 s de una corrida sana */
+    struct instance *inst;
+    size_t len;
+    if (memory_open(name, &inst, &len) != MEM_OK) {
+        _exit(2);
+    }
+    for (uint64_t i = 1; i <= PER_PRODUCER; i++) {
+        struct message m = msg_with(id, i);
+        struct op_snapshot s = {0};
+        if (sync_put(inst, &m, &s) != PUT_OK) {
+            _exit(3);          /* nadie deberia rechazar: aun no hay corte */
+        }
+        if (s.seq != m.enqueue_seq || s.occupancy == 0) {
+            _exit(4);          /* el snapshot no refleja la operacion */
+        }
+    }
+    memory_unmap(inst, len);
+    _exit(0);
+}
+
+static void run_consumer(const char *name, struct tally *t) {
+    alarm(15);   /* margen 15x sobre el ~1 s de una corrida sana */
+    struct instance *inst;
+    size_t len;
+    if (memory_open(name, &inst, &len) != MEM_OK) {
+        _exit(2);
+    }
+    for (;;) {
+        struct message out;
+        struct op_snapshot s = {0};
+        enum get_result r = sync_get(inst, &out, &s);
+        if (r == GET_DRAINED) {
+            break;
+        }
+        /* FIFO global: con una sola cola, el extraido k-esimo tiene que
+         * ser el insertado k-esimo. */
+        if (out.enqueue_seq != s.seq) {
+            _exit(5);
+        }
+        if (out.producer_id < 1 || out.producer_id > PRODUCERS ||
+            out.sequence < 1 || out.sequence > PER_PRODUCER) {
+            _exit(6);          /* identidad corrupta */
+        }
+        size_t slot = (size_t)(out.producer_id - 1) * PER_PRODUCER +
+                      (size_t)(out.sequence - 1);
+        atomic_fetch_add(&t->seen[slot], 1u);
+    }
+    memory_unmap(inst, len);
+    _exit(0);
+}
+
+/* Capacidad 4 contra 8 procesos: el buffer se llena y se vacia todo el
+ * tiempo, asi que productores y consumidores se bloquean de verdad. */
+static bool test_many_processes_conserve_every_message(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("many", 4, &name, &len);
+    CHECK(inst != NULL);
+
+    struct tally *t = tally_create();
+    CHECK(t != NULL);
+
+    pid_t prod[PRODUCERS], cons[CONSUMERS];
+    for (int i = 0; i < CONSUMERS; i++) {
+        cons[i] = fork();
+        CHECK(cons[i] != -1);
+        if (cons[i] == 0) {
+            run_consumer(name, t);
+        }
+    }
+    for (int i = 0; i < PRODUCERS; i++) {
+        prod[i] = fork();
+        CHECK(prod[i] != -1);
+        if (prod[i] == 0) {
+            run_producer(name, (uint32_t)(i + 1));
+        }
+    }
+
+    /* Todos los productores terminan antes del corte: si no, sus
+     * inserciones se rechazarian y la conservacion fallaria por el
+     * guion de la prueba, no por un bug. */
+    bool ok = true;
+    for (int i = 0; i < PRODUCERS; i++) {
+        int st;
+        if (waitpid(prod[i], &st, 0) != prod[i] || !WIFEXITED(st) ||
+            WEXITSTATUS(st) != 0) {
+            ok = false;
+        }
+    }
+    CHECK(ok);
+
+    /* El padre hace de finisher: corta y despierta a todos. */
+    sync_lock(inst);
+    inst->state = STATE_CLOSING;
+    sync_broadcast_all(inst);
+    sync_unlock(inst);
+
+    for (int i = 0; i < CONSUMERS; i++) {
+        int st;
+        if (waitpid(cons[i], &st, 0) != cons[i] || !WIFEXITED(st) ||
+            WEXITSTATUS(st) != 0) {
+            ok = false;
+        }
+    }
+    CHECK(ok);
+
+    /* Cada mensaje salio exactamente una vez: 0 seria perdida, 2 o mas
+     * duplicado. */
+    unsigned perdidos = 0, duplicados = 0;
+    for (size_t i = 0; i < TOTAL; i++) {
+        unsigned v = atomic_load(&t->seen[i]);
+        if (v == 0) {
+            perdidos++;
+        } else if (v > 1) {
+            duplicados++;
+        }
+    }
+    CHECK(perdidos == 0);
+    CHECK(duplicados == 0);
+
+    CHECK(inst->enqueue_seq == TOTAL);
+    CHECK(inst->dequeue_seq == TOTAL);
+    CHECK(inst->count == 0);
+    CHECK(inst->metrics.latency.count == TOTAL);   /* una muestra por extraccion */
+    CHECK(inst->metrics.rejected_puts == 0);
+
+    munmap(t, sizeof(*t));
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
 int main(void) {
     struct test_case tests[] = {
         {"broadcast_all_succeeds", test_broadcast_all_succeeds},
@@ -440,6 +605,7 @@ int main(void) {
         {"get_feeds_instance_metrics", test_get_feeds_instance_metrics},
         {"snapshot_without_contention", test_snapshot_without_contention},
         {"put_blocks_and_counts_the_wait", test_put_blocks_and_counts_the_wait},
+        {"many_processes_conserve_every_message", test_many_processes_conserve_every_message},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;
