@@ -29,6 +29,10 @@ static const char *name_for(const char *tag) {
 struct flags {
     int child_waiting;
     int go;
+    int started;
+    int done;
+    unsigned long long wait_ns;
+    unsigned wait_count;
 };
 
 static struct flags *flags_create(void) {
@@ -38,8 +42,7 @@ static struct flags *flags_create(void) {
         return NULL;
     }
     struct flags *f = p;
-    f->child_waiting = 0;
-    f->go = 0;
+    *f = (struct flags){0};
     return f;
 }
 
@@ -333,6 +336,98 @@ static bool test_get_feeds_instance_metrics(void) {
     return true;
 }
 
+/* ---- Medicion de esperas (D11) ---------------------------------------- */
+
+/* Sin contencion no hay esperas que contar. lock_ns se mide igual, y el
+ * tope detecta una resta invertida: con unsigned, now - t0 al reves da un
+ * numero astronomico en vez de negativo. */
+static bool test_snapshot_without_contention(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("nowait", 4, &name, &len);
+    CHECK(inst != NULL);
+
+    struct message m = msg_with(1, 1);
+    struct op_snapshot s = {0};
+    CHECK(sync_put(inst, &m, &s) == PUT_OK);
+    CHECK(s.wait_count == 0);
+    CHECK(s.wait_ns == 0);
+    CHECK(s.lock_ns < 1000000000ull);        /* < 1 s: no hubo resta invertida */
+
+    struct message out;
+    struct op_snapshot g = {0};
+    CHECK(sync_get(inst, &out, &g) == GET_OK);
+    CHECK(g.wait_count == 0 && g.wait_ns == 0);
+    CHECK(g.lock_ns < 1000000000ull);
+
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
+/* Un productor contra un buffer lleno tiene que dormirse de verdad, y la
+ * espera tiene que quedar contada. El padre comprueba primero que el hijo
+ * sigue bloqueado y recien despues le hace lugar: eso demuestra que put
+ * bloquea, que las pruebas de un solo proceso no podian mostrar. */
+static bool test_put_blocks_and_counts_the_wait(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("wait", 1, &name, &len);   /* capacidad 1 */
+    CHECK(inst != NULL);
+
+    struct message first = msg_with(1, 1);
+    CHECK(sync_put(inst, &first, NULL) == PUT_OK);
+    CHECK(buffer_is_full(inst));
+
+    struct flags *f = flags_create();
+    CHECK(f != NULL);
+
+    pid_t pid = fork();
+    CHECK(pid != -1);
+    if (pid == 0) {
+        alarm(10);
+        struct instance *mine;
+        size_t mlen;
+        if (memory_open(name, &mine, &mlen) != MEM_OK) {
+            _exit(2);
+        }
+        struct message m = msg_with(2, 1);
+        struct op_snapshot s = {0};
+        f->started = 1;
+        if (sync_put(mine, &m, &s) != PUT_OK) {
+            _exit(3);
+        }
+        f->wait_ns = s.wait_ns;
+        f->wait_count = s.wait_count;
+        f->done = 1;
+        memory_unmap(mine, mlen);
+        _exit(0);
+    }
+
+    while (!f->started) {
+        struct timespec ms = {0, 1000000};
+        nanosleep(&ms, NULL);
+    }
+    struct timespec pausa = {0, 50 * 1000000};   /* 50 ms de margen */
+    nanosleep(&pausa, NULL);
+    CHECK(f->done == 0);        /* sigue bloqueado: put espera, no falla */
+
+    struct message out;
+    CHECK(sync_get(inst, &out, NULL) == GET_OK);   /* le hace lugar */
+
+    int status;
+    CHECK(waitpid(pid, &status, 0) == pid);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(f->done == 1);
+    CHECK(f->wait_count >= 1);                     /* durmio al menos una vez */
+    CHECK(f->wait_ns > 0);
+
+    munmap(f, sizeof(*f));
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
 int main(void) {
     struct test_case tests[] = {
         {"broadcast_all_succeeds", test_broadcast_all_succeeds},
@@ -343,6 +438,8 @@ int main(void) {
         {"put_rejected_when_closing", test_put_rejected_when_closing},
         {"get_drains_before_reporting_drained", test_get_drains_before_reporting_drained},
         {"get_feeds_instance_metrics", test_get_feeds_instance_metrics},
+        {"snapshot_without_contention", test_snapshot_without_contention},
+        {"put_blocks_and_counts_the_wait", test_put_blocks_and_counts_the_wait},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;

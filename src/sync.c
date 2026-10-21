@@ -153,23 +153,58 @@ static void cond_signal_checked(pthread_cond_t *cond) {
     }
 }
 
+/* ---- Medicion de esperas para op_snapshot (D11) ----------------------- */
+
+/* El reloj solo se lee si el llamador pidio snapshot: quien no quiere las
+ * metricas no paga las lecturas. Medir lock_ns cuesta dos lecturas por
+ * operacion aunque no haya contencion, que es el precio de los datos que
+ * D11 pide para el resumen por proceso. */
+static uint64_t mark_if(bool on) {
+    return on ? now_monotonic_ns() : 0;
+}
+
+static uint64_t since_if(bool on, uint64_t mark) {
+    return on ? now_monotonic_ns() - mark : 0;
+}
+
 /* ---- Operaciones bloqueantes (D3) ------------------------------------- */
 
 enum put_result sync_put(struct instance *inst, struct message *msg,
                          struct op_snapshot *snap) {
+    const bool measure = (snap != NULL);
+    if (measure) {
+        *snap = (struct op_snapshot){0};   /* todo campo queda definido */
+    }
+
+    uint64_t mark = mark_if(measure);
     sync_lock(inst);
+    uint64_t lock_ns = since_if(measure, mark);
+    uint64_t wait_ns = 0;
+    uint32_t wait_count = 0;
 
     /* Ciclo while y no if: cond_wait puede despertar de forma espuria, y
      * ademas otro productor puede haber vuelto a llenar el buffer entre
      * el signal y nuestra readquisicion del mutex. */
     while (buffer_is_full(inst) && inst->state == STATE_OPEN) {
+        uint64_t slept = mark_if(measure);
         cond_wait_checked(&inst->not_full, &inst->mutex);
+        if (measure) {
+            wait_ns += since_if(true, slept);
+            wait_count++;
+        }
     }
 
     /* El corte le gana al espacio: el productor sale apenas el estado deja
      * de ser OPEN, aunque haya lugar libre (D3). */
     if (inst->state != STATE_OPEN) {
         inst->metrics.rejected_puts++;   /* no cuenta como aceptado (D11) */
+        if (measure) {
+            /* La espera ocurrio aunque el intento terminara rechazado: no
+             * se descarta, o el resumen por proceso la perderia. */
+            snap->lock_ns = lock_ns;
+            snap->wait_ns = wait_ns;
+            snap->wait_count = wait_count;
+        }
         sync_unlock(inst);
         return PUT_REJECTED_CLOSING;
     }
@@ -178,10 +213,13 @@ enum put_result sync_put(struct instance *inst, struct message *msg,
     msg->enqueue_time_ns = now_monotonic_ns();
     buffer_push(inst, msg);
 
-    if (snap != NULL) {
+    if (measure) {
         snap->seq = msg->enqueue_seq;
         snap->time_ns = msg->enqueue_time_ns;
         snap->occupancy = inst->count;
+        snap->lock_ns = lock_ns;
+        snap->wait_ns = wait_ns;
+        snap->wait_count = wait_count;
     }
 
     /* signal y no broadcast: un push satisface exactamente a un
@@ -193,16 +231,35 @@ enum put_result sync_put(struct instance *inst, struct message *msg,
 
 enum get_result sync_get(struct instance *inst, struct message *out,
                          struct op_snapshot *snap) {
+    const bool measure = (snap != NULL);
+    if (measure) {
+        *snap = (struct op_snapshot){0};
+    }
+
+    uint64_t mark = mark_if(measure);
     sync_lock(inst);
+    uint64_t lock_ns = since_if(measure, mark);
+    uint64_t wait_ns = 0;
+    uint32_t wait_count = 0;
 
     while (buffer_is_empty(inst) && inst->state == STATE_OPEN) {
+        uint64_t slept = mark_if(measure);
         cond_wait_checked(&inst->not_empty, &inst->mutex);
+        if (measure) {
+            wait_ns += since_if(true, slept);
+            wait_count++;
+        }
     }
 
     /* Vacio al salir del ciclo implica que el estado ya no es OPEN: si lo
      * fuera y estuviera vacio, seguiriamos dormidos. Por eso alcanza con
      * mirar el buffer (D3). */
     if (buffer_is_empty(inst)) {
+        if (measure) {
+            snap->lock_ns = lock_ns;
+            snap->wait_ns = wait_ns;
+            snap->wait_count = wait_count;
+        }
         sync_unlock(inst);
         return GET_DRAINED;
     }
@@ -216,10 +273,13 @@ enum get_result sync_get(struct instance *inst, struct message *out,
     inst->metrics.last_dequeue_ns = now;
     lat_hist_add(&inst->metrics.latency, now - out->enqueue_time_ns);
 
-    if (snap != NULL) {
+    if (measure) {
         snap->seq = dseq;
         snap->time_ns = now;
         snap->occupancy = inst->count;
+        snap->lock_ns = lock_ns;
+        snap->wait_ns = wait_ns;
+        snap->wait_count = wait_count;
     }
 
     cond_signal_checked(&inst->not_full);
