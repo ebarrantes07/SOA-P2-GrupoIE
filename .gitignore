@@ -10,6 +10,7 @@ build/
 /producer
 /consumer
 /finisher
+/verify
 /tests/bin/
 
 # Sanitizers y depuración

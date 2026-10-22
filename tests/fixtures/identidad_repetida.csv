@@ -1,0 +1,5 @@
+role,id,event,t_ns,producer_id,sequence,enqueue_seq,dequeue_seq,enqueue_time_ns,occupancy,checksum,payload_ok,detail
+producer,1,PUT,1100,1,1,1,,1100,1,0x1111,,
+producer,1,PUT,1150,1,1,2,,1150,2,0x1111,,
+consumer,9,GET,1300,1,1,1,1,1100,1,0x1111,1,
+consumer,9,GET,1400,1,1,2,2,1150,0,0x1111,1,

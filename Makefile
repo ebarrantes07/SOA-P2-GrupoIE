@@ -16,7 +16,7 @@ LDLIBS   += -lrt
 endif
 
 # Ejecutables: cada uno tiene su main en src/<nombre>.c.
-BINS     := creator producer consumer finisher
+BINS     := creator producer consumer finisher verify
 MAINS    := $(addprefix src/,$(addsuffix .c,$(BINS)))
 
 # Módulos comunes: todo src/*.c que no sea un main.

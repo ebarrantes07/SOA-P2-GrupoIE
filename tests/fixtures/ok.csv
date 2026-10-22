@@ -1,0 +1,9 @@
+role,id,event,t_ns,producer_id,sequence,enqueue_seq,dequeue_seq,enqueue_time_ns,occupancy,checksum,payload_ok,detail
+producer,1,JOIN,1000,,,,,,,,,4321
+producer,1,PUT,1100,1,1,1,,1100,1,0x1111,,
+producer,1,PUT,1200,1,2,2,,1200,2,0x2222,,
+consumer,9,GET,1300,1,1,1,1,1100,1,0x1111,1,
+finisher,0,CLOSING,1350,,,2,1,,1,,,
+consumer,9,GET,1400,1,2,2,2,1200,0,0x2222,1,
+consumer,9,DRAINED,1450,,,,,,0,,,
+finisher,0,CLOSED,1500,,,,,,,,,released
