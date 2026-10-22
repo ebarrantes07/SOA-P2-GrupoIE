@@ -17,9 +17,13 @@
 
 /* ---- Ciclo de vida de las primitivas ---------------------------------- */
 
-/* Inicializa mutex y las tres condvars con PTHREAD_PROCESS_SHARED y reloj
- * CLOCK_MONOTONIC. La llama solo el creator, antes de publicar el magic.
- * Devuelve 0, o -errno dejando deshecho lo que alcanzo a crear. */
+/* Inicializa mutex y las cuatro condvars con PTHREAD_PROCESS_SHARED y
+ * reloj CLOCK_MONOTONIC. La llama solo el creator, antes de publicar el
+ * magic. Devuelve 0, o -errno dejando deshecho lo que alcanzo a crear.
+ *
+ * Init y destroy devuelven el error en vez de abortar, a diferencia de
+ * las operaciones de abajo: el creator y el finisher todavia pueden
+ * informar y limpiar (ver D18). */
 int sync_init_primitives(struct instance *inst);
 
 /* Destruye mutex y condvars. La llama solo el finisher, y solo cuando ya
@@ -30,11 +34,14 @@ int sync_destroy_primitives(struct instance *inst);
 
 /* Para que el registro de participantes (#12) y el finisher (#16/#17)
  * construyan sus operaciones protegidas sobre el mismo mutex. Se usan
- * siempre en pares; no anidar. */
+ * siempre en pares; no anidar.
+ *
+ * Devuelven void: un fallo del mutex significa protocolo roto y aborta
+ * con el nombre de la llamada y la causa (D18). */
 void sync_lock(struct instance *inst);
 void sync_unlock(struct instance *inst);
 
-/* Despierta a todos los bloqueados en las tres condvars. Precondicion:
+/* Despierta a todos los bloqueados en las cuatro condvars. Precondicion:
  * mutex tomado. La usa el finisher al pasar a CLOSING, porque ese cambio
  * vuelve falso el predicado de TODOS los que esperan (ver D3). */
 void sync_broadcast_all(struct instance *inst);
@@ -44,7 +51,18 @@ void sync_broadcast_all(struct instance *inst);
 /* Datos capturados DENTRO de la region critica para que el llamador los
  * escriba al CSV despues de soltar el mutex (exigencia del enunciado:
  * "capturar bajo proteccion los datos necesarios para registrar un evento
- * y escribirlos despues"). Puede pasarse NULL si no se va a registrar. */
+ * y escribirlos despues"). Puede pasarse NULL si no se va a registrar.
+ *
+ * Pasar NULL ademas evita las lecturas de reloj de la medicion: quien no
+ * quiere las metricas no las paga (D18).
+ *
+ * Con snapshot, la estructura se pone en cero al entrar, asi que todos
+ * sus campos quedan definidos en cualquier camino. En un intento
+ * rechazado (PUT_REJECTED_CLOSING) o sin datos (GET_DRAINED) solo los
+ * tres campos de medicion traen informacion: la espera ocurrio aunque la
+ * operacion no prosperara, y descartarla le restaria tiempo real al
+ * resumen por proceso. `seq`, `time_ns` y `occupancy` quedan en 0 porque
+ * no tienen significado ahi. */
 struct op_snapshot {
     uint64_t seq;          /* enqueue_seq en put, dequeue_seq en get */
     uint64_t time_ns;      /* CLOCK_MONOTONIC, tomado bajo proteccion */
