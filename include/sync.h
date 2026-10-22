@@ -46,6 +46,12 @@ void sync_unlock(struct instance *inst);
  * vuelve falso el predicado de TODOS los que esperan (ver D3). */
 void sync_broadcast_all(struct instance *inst);
 
+/* Despierta al finisher que espera en all_left. La usa instance_detach
+ * (D9, #12) al soltar una referencia de conexión. Precondicion: mutex
+ * tomado. signal y no broadcast: solo puede haber un finisher esperando
+ * (D3). Misma politica de errores que el resto (D18). */
+void sync_signal_all_left(struct instance *inst);
+
 /* ---- Operaciones bloqueantes sobre el buffer --------------------------- */
 
 /* Datos capturados DENTRO de la region critica para que el llamador los

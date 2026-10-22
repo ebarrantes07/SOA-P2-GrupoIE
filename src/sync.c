@@ -153,6 +153,10 @@ static void cond_signal_checked(pthread_cond_t *cond) {
     }
 }
 
+void sync_signal_all_left(struct instance *inst) {
+    cond_signal_checked(&inst->all_left);
+}
+
 /* ---- Medicion de esperas para op_snapshot (D11) ----------------------- */
 
 /* El reloj solo se lee si el llamador pidio snapshot: quien no quiere las

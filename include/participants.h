@@ -61,8 +61,10 @@ struct participant_table {
 
 enum attach_result {
     ATTACH_OK = 0,
+    ATTACH_INVALID_NAME,    /* el nombre no cumple el formato de D13 */
     ATTACH_NOT_FOUND,       /* shm_open falló con ENOENT: no existe la instancia */
     ATTACH_NOT_READY,       /* magic != INSTANCE_MAGIC: creator no terminó o no es nuestra */
+    ATTACH_INCOMPATIBLE,    /* versión, capacidad o tamaño no coinciden (D13) */
     ATTACH_CLOSING,         /* puerta cerrada: la instancia ya está en CLOSING */
     ATTACH_SYS_ERROR        /* otro error de sistema; errno queda con la causa */
 };
@@ -73,6 +75,9 @@ enum attach_result {
  * mapeado ni referencia tomada. */
 enum attach_result instance_attach(const char *name, struct instance **out,
                                    size_t *map_len);
+
+/* Mensajes legibles para los ejecutables. */
+const char *attach_result_str(enum attach_result r);
 
 /* Suelta la referencia (bajo el mutex, con signal a all_left) y desmapea.
  * Todo proceso que obtuvo ATTACH_OK la llama exactamente una vez, salvo el
@@ -88,6 +93,8 @@ enum register_result {
     REG_NOT_OPEN,           /* la instancia ya no está en OPEN */
     REG_TABLE_FULL          /* se agotaron las MAX_PARTICIPANTS_PER_ROLE casillas */
 };
+
+const char *register_result_str(enum register_result r);
 
 /* Bajo el mutex: verifica state == OPEN, unicidad del id y espacio en la
  * tabla; ocupa la casilla, incrementa active_producers/active_consumers y,
