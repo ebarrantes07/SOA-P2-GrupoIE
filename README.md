@@ -47,6 +47,16 @@ Además se define `_POSIX_C_SOURCE=200809L` como macro de características y se 
 | `results/` | Resultados; solo se versiona `results/seleccionados/` |
 | `docs/` | Bitácora de decisiones (`decisiones_diseno.md`) e informe |
 
+## Material reutilizado
+
+El generador pseudoaleatorio `xorshift32` de `src/rng.c` (estado de 32 bits y la secuencia
+`x ^= x << 13; x ^= x >> 17; x ^= x << 5;`) se reutiliza tal cual del Proyecto 1 del mismo
+grupo, [SOA-P1-GrupoIE](https://github.com/ifmoreno-sp/SOA-P1-GrupoIE) (`src/rng.c`). Lo
+nuevo en este proyecto es el muestreo exponencial por transformada inversa
+(`rng_uniform01` y `rng_exponential_ms`), que el Proyecto 1 no tenía.
+
+El resto del código es original de este proyecto.
+
 ## Uso
 
 _Se completa a medida que se implementan los ejecutables (interfaz mínima del enunciado,
@@ -61,6 +71,22 @@ formatos CSV y protocolo de ejecución y cierre)._
 Crea e inicializa la instancia y termina con código 0 cuando ya acepta participantes. El
 nombre es `/` seguido de 1 a 30 caracteres `[A-Za-z0-9_-]` y la capacidad va de 1 a 1024.
 Si ya existe una instancia con ese nombre, la rechaza sin modificarla (código 1).
+
+### Opciones
+
+| Opción | creator | producer | consumer | finisher | Valor |
+|---|---|---|---|---|---|
+| `--name` | ✓ | ✓ | ✓ | ✓ | `/` + 1 a 30 caracteres `[A-Za-z0-9_-]` |
+| `--capacity` | ✓ | | | | entero de 1 a 1024 |
+| `--id` | | ✓ | ✓ | | entero de 1 a 4294967295, único por rol |
+| `--mean-ms` | | ✓ | ✓ | | número de 0 a 1000 (p. ej. `5` o `2.5`); `0` desactiva las pausas |
+| `--seed` | | ✓ | ✓ | | entero de 1 a 4294967295 |
+| `--messages` | | opcional | | | cuota positiva; sin ella el productor sigue hasta el cierre |
+| `--log` | | ✓ | ✓ | opcional | ruta del CSV del proceso |
+| `--summary` | | | | ✓ | ruta del CSV de resumen |
+
+✓ = obligatoria. Cualquier argumento inválido, faltante, repetido o desconocido termina con un
+mensaje en `stderr` y código 1. `--help` muestra el uso de cada ejecutable.
 
 ## Versión entregada
 
