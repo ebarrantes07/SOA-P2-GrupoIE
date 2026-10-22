@@ -1184,6 +1184,204 @@ El id duplicado y la instancia inexistente, que también son casos de
 
 ---
 
+## D16 — Verificador de los CSV (`include/verify.h`)
+
+- **Fecha:** 2026-10-18
+- **Issue:** [#7](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/7)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+D12 fija el formato de los CSV y enumera, al final, lo que ese formato
+*permite* verificar. Esta entrada define la herramienta que efectivamente
+lo verifica, que es el issue #7.
+
+El problema de fondo: con 32 productores y 32 consumidores (el caso de
+estrés de #20), una condición de carrera puede perder, duplicar o
+desordenar un mensaje entre miles sin que nada se caiga ni se note en la
+salida por pantalla. Las pruebas de integración de #20 necesitan un
+oráculo que decida "esta corrida fue correcta" de forma automática; sin
+él solo podrían afirmar "no crasheó". Por eso #7 bloquea a #20.
+
+### Forma de la herramienta
+
+Un ejecutable `verify` que recibe N rutas de CSV de cualquier rol y los
+cruza como un solo conjunto de eventos:
+
+```text
+./verify resultados/prod1.csv resultados/cons1.csv resultados/fin.csv
+```
+
+Sale con 0 si la corrida es correcta y distinto de 0 si encuentra una
+violación, indicando cuál. Reporta **todas** las violaciones que encuentra,
+no solo la primera: mismo criterio que `CHECK()` en `tests/test_util.h`, y
+por la misma razón — al depurar una corrida fallida interesa el panorama
+completo, no el primer síntoma.
+
+El código se parte en dos para poder probarlo sin lanzar procesos:
+
+- `src/verify_core.c` — parseo y chequeos, sin escribir a consola.
+- `src/verify.c` — `main` delgado: abre los archivos, llama al núcleo,
+  imprime el reporte y traduce el resultado a código de salida.
+
+Así `tests/test_verify.c` ejercita la lógica con CSV en memoria
+(`fmemopen`), sin tocar disco, igual que el resto de la suite.
+
+### Códigos de salida y pruebas de la CLI (slice 4)
+
+| Código | Significado |
+|---|---|
+| 0 | sin violaciones |
+| 1 | al menos una violación |
+| 2 | no se pudo leer una entrada, o el uso es incorrecto |
+
+Separar el 1 del 2 importa: un archivo ilegible no es lo mismo que una
+corrida incorrecta, y el #20 necesita distinguirlos para no dar por
+fallada una prueba cuando lo que falló fue el arnés.
+
+`verify` agrega a `BINS` en el Makefile. No es opcional: `COMMON` es
+`src/*.c` menos los `main`, así que un `src/verify.c` fuera de `BINS`
+terminaría enlazado dentro de los demás ejecutables y de cada binario de
+prueba, con dos `main`.
+
+Las pruebas van en dos niveles. `tests/test_verify.c` prueba la lógica
+con CSV en memoria; `tests/test_verify_cli.c` corre el **binario de
+verdad** con `popen` contra los CSV de `tests/fixtures/` y verifica el
+código de salida y el texto del reporte, que son criterios de aceptación
+del issue y no se pueden comprobar llamando a las funciones. Hay un
+fixture por tipo de violación, uno correcto, uno malformado, y un par
+(`multi_productor.csv` + `multi_consumidor.csv`) que solo cuadra cuando
+se pasan los dos juntos — el caso que justifica la herramienta, ya que
+cada proceso escribe su propio archivo.
+
+### Política de parseo: rechazar antes que aceptar a medias
+
+Un CSV ya escrito es una frontera del sistema: puede venir de un proceso
+que murió a la mitad, de un disco lleno o de una edición a mano. Como la
+herramienta existe justamente para detectar datos alterados, el parseo es
+estricto y rechaza la fila completa ante cualquier duda, en vez de
+quedarse con una versión parcial. Se rechaza:
+
+- Un número de columnas distinto de 13 — incluida una coma dentro de
+  `detail`, el único campo de texto libre. D12 garantiza que ningún campo
+  lleva comas; si ese invariante se rompiera, la fila se rechaza en lugar
+  de desalinear las columnas siguientes.
+- Números con signo o con basura alrededor. `strtoull("-1")` devuelve
+  `ULONG_MAX` **sin** marcar `ERANGE`, así que el signo se corta antes de
+  convertir. Ninguna columna de D12 es negativa.
+- Valores que no entran en el tipo de su columna (`uint32_t`) o que
+  desbordan `uint64_t` (`ERANGE`).
+- Un `detail` de 48 caracteres o más (`LOG_DETAIL_MAX`). Truncarlo sería
+  alterar el dato en silencio; el valor más largo que define D12
+  (`already_closing`) mide 15.
+- Una línea que no entra en `LOG_LINE_MAX` (512 bytes, contra ~100 de una
+  fila real). Este caso es el más traicionero: `fgets` entrega el resto en
+  la llamada siguiente, y si los dos pedazos parsean, el verificador
+  cuenta una fila que nunca se escribió. Se reprodujo con un archivo de
+  una sola línea de datos que producía dos filas, la segunda inventada.
+- Un error de lectura a mitad de archivo (`ferror`), que de otro modo se
+  confunde con fin de archivo y daría por bueno un log incompleto.
+
+Un campo que D12 marca como "no aplica a este evento" llega vacío y queda
+en `0` (numéricos) o `""` (`detail`). No hay valores centinela: decidir
+qué columna importa para cada `event` es trabajo de los chequeos, no del
+parseo. Esto mantiene el parser simple y evita inventar un "ausente" que
+chocaría con valores legítimos (`occupancy` vale 0 en un `DRAINED`).
+
+### Los cuatro chequeos
+
+1. **Conservación de identidades.** Cada `PUT` con `enqueue_seq` asignado
+   tiene exactamente un `GET` con la misma identidad `(producer_id,
+   sequence)`. Cero extracciones es una pérdida; dos o más, un duplicado.
+   Al implementarlo (#7, slice 2) se agregaron dos casos que el issue no
+   nombraba: un `GET` sin `PUT` (mensaje fantasma) y dos `PUT` con la
+   misma identidad, que viola la unicidad que exige el enunciado y que de
+   otro modo pasaría inadvertida cuando también hay dos `GET`, porque los
+   conteos se cancelan. `PUT_REJECTED` se ignora: lleva identidad, pero
+   ese mensaje nunca entró al buffer y contarlo convertiría cada rechazo
+   legítimo del cierre en una pérdida.
+2. **Integridad.** En cada par emparejado, `PUT.checksum ==
+   GET.checksum` y `GET.payload_ok == 1`. Implementado así en #7, slice 3;
+   podría ser más estricto recalculando el checksum, ver la limitación
+   anotada abajo. Un `GET` puede producir las dos violaciones a la vez: el
+   veredicto del consumidor sobre el mensaje que recibió y la comparación
+   contra lo que registró el productor son hechos distintos.
+3. **FIFO.** Para cada `GET`, `enqueue_seq == dequeue_seq`. Es la forma
+   más fuerte y más simple de lo que D12 enuncia como "ordenar los `GET`
+   por `dequeue_seq` y ver que `enqueue_seq` crece sin huecos": como hay
+   una sola cola, el mensaje extraído k-ésimo tiene que ser exactamente el
+   insertado k-ésimo.
+4. **Corte y cierre.** Ningún `PUT` con `enqueue_seq` mayor al que reporta
+   el evento `CLOSING`, y al final aceptados == extraídos. Al
+   implementarlo (#7, slice 4) se agregó un tercer contraste: que la foto
+   del `CLOSING` cierre sola, `aceptados == extraídos + pendientes`, ya
+   que lo aceptado está extraído o todavía en el buffer y no hay un tercer
+   lugar donde pueda estar. Un `PUT` con `enqueue_seq` *igual* al corte es
+   legítimo — es el último aceptado —, así que la comparación es estricta
+   solo por encima. Sin evento `CLOSING` el chequeo no corre y lo informa,
+   en vez de dar el cierre por bueno: verificar los CSV de una corrida a
+   la que no se le pasó el log del finisher es un caso normal, no un
+   error. El conteo final es global y no señala un mensaje; cuando el
+   chequeo 1 está limpio, delata que faltan filas de log.
+
+### Alternativas descartadas
+
+- **Un script en Python o AWK.** Más corto de escribir, pero agrega una
+  dependencia de runtime a la hora de evaluar y se aparta del resto del
+  entregable, que es C con su propia convención de pruebas.
+- **Verificar en vivo dentro del consumidor.** Mezclaría la herramienta de
+  medición con lo medido (y su costo entraría en las latencias), y no
+  podría cruzar eventos de procesos distintos.
+- **Un parser CSV general, con comillas y escapes.** D12 ya garantiza que
+  ningún campo lleva comas. Un parser tolerante escondería un logger roto
+  en vez de delatarlo, que es lo contrario de lo que se busca acá.
+
+### Limitaciones documentadas
+
+- ~~Una fila malformada invalida el archivo entero y no se indica en qué
+  línea.~~ **Resuelto en #7, slice 4.** `log_rows_read` pasó de devolver
+  `bool` a un `enum log_read_result` (vacío, fila inválida, error de
+  lectura, sin memoria) más el número de línea, por la misma razón que
+  `memory_result` en D13: los casos que el usuario necesita distinguir no
+  se corresponden uno a uno con un `errno`. La CLI imprime
+  `verify: <archivo>, linea <N>: <motivo>`. La fila mala sigue
+  invalidando el archivo entero, que es lo correcto —seguir con filas
+  salteadas daría un veredicto sobre datos incompletos—, pero ahora dice
+  dónde está.
+- Las ramas de `ferror` y de falla de `realloc` no tienen prueba
+  automatizada: forzarlas requiere inyectar fallos de E/S o de memoria, y
+  los trucos portables para lograrlo no se comportan igual en Linux y en
+  macOS.
+- **El chequeo de contenido no recalcula el checksum**, solo compara el
+  que registró el `PUT` contra el del `GET`. D1 lo habilita
+  explícitamente — `fill[i] = (producer_id + sequence + i) % 256` y
+  FNV-1a sobre 28 bytes hacen que el checksum sea una función pura de
+  `(producer_id, sequence)` —, y recalcularlo detectaría dos cosas más:
+  un productor que generó mal el payload desde el arranque, y un
+  consumidor con un `payload_ok` mal calculado (hoy el verificador le
+  cree).
+
+  No se hizo en #7 porque **al 2026-10-19 no existe ninguna
+  implementación del checksum en el repo**: solo están el campo en
+  `struct payload` y la especificación de D1. El plan la espera en #14
+  (`producer`, Emmanuel), que depende de #4, #5, #6, #11, #12 y #13, así
+  que llega bastante después del verificador. El criterio de #10
+  ("payload verificable (definido y documentado)") se cumplió con D1, sin
+  código.
+
+  **Lo que hay que no perder de vista:** #15 (`consumer`, Isaac) también
+  necesita recalcular `fill` y `checksum` para poder escribir la columna
+  `payload_ok` que exige D12, y sus criterios de aceptación no lo
+  mencionan. Si el productor, el consumidor y el verificador escriben
+  cada uno su FNV-1a, basta un byte de diferencia en la serialización
+  para que el verificador marque *todos* los mensajes como alterados. La
+  salida propuesta es una sola función compartida,
+  `payload_checksum(producer_id, sequence)`, en un issue chico del que
+  dependan #7 (para endurecer este chequeo), #14 y #15 — y corregir el
+  criterio de #15 para que nombre el recálculo.
+
+---
+
 ## D17 — Logger CSV (`include/logger.h`)
 
 - **Fecha:** 2026-10-20
@@ -1255,3 +1453,84 @@ inconsistencia del cierre que provoca la pérdida.
 - **`fflush` en cada fila:** más robusto ante una caída, pero agrega una
   llamada al sistema por evento y distorsiona el experimento. El costo de
   los logs se discute en el informe, como pide el enunciado.
+
+---
+
+## D18 — Política de errores de las primitivas y cuarta condvar
+
+- **Fecha:** 2026-10-20
+- **Issue:** [#11](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/11)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+> **Numeración:** D16 queda reservada para el verificador (PR #37) y D17
+> para el logger (PR #39), ambos abiertos al escribir esto.
+
+### Contexto
+
+`sync_lock`, `sync_unlock` y `sync_broadcast_all` devuelven `void`: no
+tienen por dónde informar un error. La revisión de #29 pidió decidir qué
+hacer cuando una primitiva falla, y dejarlo escrito.
+
+### Decisión
+
+Dos tratos distintos, según quién pueda hacer algo con el error:
+
+- **`sync_init_primitives` y `sync_destroy_primitives` devuelven `-rc`.**
+  Las llaman el creator y el finisher, que todavía pueden informar al
+  usuario y limpiar lo que crearon. Un fallo acá es una condición
+  manejable: el segmento no se publica y listo.
+- **`lock` / `unlock` / `wait` / `signal` / `broadcast` abortan**, con el
+  nombre de la llamada y la causa en `stderr`. Los errores que estas
+  primitivas pueden devolver describen un protocolo ya roto, no una
+  condición de carrera recuperable: `EINVAL` es un mutex sin inicializar,
+  `EPERM` es soltar un mutex ajeno, `EDEADLK` es un deadlock detectado.
+  Continuar después de cualquiera de los tres significa operar sobre un
+  buffer compartido cuya exclusión mutua no se sostiene, que es peor que
+  terminar.
+
+```c
+static void primitive_failed(const char *call, int rc) {
+    fprintf(stderr, "sync: %s: %s\n", call, strerror(rc));
+    abort();
+}
+```
+
+Dos detalles que es fácil equivocar:
+
+- **Chequeo explícito, no `assert`.** Con `-DNDEBUG` el `assert`
+  desaparece y el fallo pasaría en silencio. Es la misma lección del fix
+  de `now_monotonic_ns` en #34.
+- **`strerror(rc)` y no `perror`.** A diferencia de las llamadas al
+  sistema, las funciones `pthread_*` **no usan `errno`**: devuelven el
+  código de error directamente. Usar `perror` ahí imprimiría el `errno`
+  de alguna llamada anterior, sin relación con el fallo real.
+
+**Sin prueba automatizada:** forzar que `pthread_mutex_lock` falle exige
+corromper el mutex a propósito, y el comportamiento de hacerlo no está
+definido por el estándar, así que una prueba de eso verificaría una
+casualidad del sistema y no un contrato.
+
+### Cuarta condvar: `closing`
+
+`struct instance` gana una cuarta condvar, pedida también por la revisión
+de #29. Mantiene la invariante que hace correcto usar `signal` en vez de
+`broadcast` (D3): **cada condvar tiene un solo tipo de esperador con un
+mismo predicado.**
+
+| Condvar | Quién duerme | Predicado |
+|---|---|---|
+| `not_full` | productores | esperando espacio |
+| `not_empty` | consumidores | esperando mensajes |
+| `closing` | productores en pausa (#13) | esperando a que termine la pausa o el corte |
+| `all_left` | el finisher | esperando `refs == 1` |
+
+Sin ella, la pausa interrumpible de #13 tendría que dormir en `not_full`,
+y entonces un productor en pausa podría consumir el `signal` destinado a
+otro bloqueado por buffer lleno, que se quedaría dormido con espacio
+disponible. `sync_broadcast_all` despierta las cuatro.
+
+**`INSTANCE_VERSION` pasa de 1 a 2**, porque agregar la condvar cambia el
+tamaño y el layout del segmento. `memory_open` valida la versión (D13),
+así que un binario nuevo rechaza con `MEM_INCOMPATIBLE` una instancia
+creada por uno viejo, en vez de interpretar mal sus campos. Es
+exactamente para lo que existe ese campo.
