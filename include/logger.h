@@ -46,6 +46,11 @@ enum csv_event {
  * verificador (LOG_DETAIL_MAX en verify.h). Lo que sobra se trunca. */
 #define CSV_DETAIL_MAX 48u
 
+/* Largo máximo de una fila, contando el '\n' y el '\0'. Tiene que
+ * coincidir con LOG_LINE_MAX del verificador: una fila más larga que eso
+ * la rechazaría. test_logger.c lo comprueba al compilar. */
+#define CSV_LINE_MAX 512u
+
 /* La cabecera de D12, sin salto de línea. */
 #define CSV_HEADER "role,id,event,t_ns,producer_id,sequence,enqueue_seq,dequeue_seq," \
                    "enqueue_time_ns,occupancy,checksum,payload_ok,detail"

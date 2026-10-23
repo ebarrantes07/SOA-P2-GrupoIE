@@ -150,9 +150,8 @@ int csv_logger_open(struct csv_logger *lg, const char *path,
 }
 
 int csv_logger_write(struct csv_logger *lg, const struct csv_record *rec) {
-    /* Una fila de D12 ronda los 150 caracteres; 512 sobra y coincide con
-     * LOG_LINE_MAX del verificador. */
-    char line[512];
+    /* Una fila de D12 ronda los 150 caracteres; CSV_LINE_MAX sobra. */
+    char line[CSV_LINE_MAX];
     int n = csv_format_row(line, sizeof(line) - 1, lg->role, lg->id, rec);
     if (n < 0)
         return -EINVAL;

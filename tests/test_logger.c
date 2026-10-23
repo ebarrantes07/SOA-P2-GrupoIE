@@ -6,11 +6,18 @@
 #include "memory.h"
 #include "sync.h"
 #include "test_util.h"
+#include "verify.h"
 
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* El logger escribe lo que el verificador (#7) lee: si una de estas
+ * constantes cambia sin la otra, el proyecto no compila en vez de producir
+ * filas que el verificador rechaza en una corrida larga. */
+_Static_assert(CSV_DETAIL_MAX == LOG_DETAIL_MAX, "detail del logger y del verificador deben coincidir");
+_Static_assert(CSV_LINE_MAX == LOG_LINE_MAX, "largo de fila del logger y del verificador deben coincidir");
 
 /* Crea un archivo temporal vacío y devuelve su ruta (estática). */
 static const char *temp_path(void) {
@@ -98,6 +105,44 @@ static bool test_every_row_has_13_columns(void) {
                 commas += *p == ',';
             CHECK(commas == 12);
         }
+    return true;
+}
+
+/* Cada fila que el logger acepta la lee el parser del verificador con los
+ * mismos valores: la compatibilidad con #7 queda cubierta en make test. */
+static bool test_verifier_reads_every_row(void) {
+    for (int ev = 0; ev < CSV_EVENT_COUNT; ev++)
+        for (int role = CSV_PRODUCER; role <= CSV_FINISHER; role++) {
+            char b[CSV_LINE_MAX];
+            struct csv_record r = full((enum csv_event)ev);
+            if (csv_format_row(b, sizeof(b), (enum csv_role)role, 3, &r) < 0)
+                continue;
+            struct log_row row;
+            CHECK(log_row_parse(b, &row));
+            CHECK((int)row.role == role);        /* mismos órdenes en los dos enums */
+            CHECK((int)row.event == ev);
+            CHECK(row.id == 3 && row.t_ns == r.t_ns);
+        }
+
+    /* Valores concretos de un GET, campo por campo. */
+    char b[CSV_LINE_MAX];
+    struct csv_record r = full(CSV_GET);
+    CHECK(csv_format_row(b, sizeof(b), CSV_CONSUMER, 9, &r) >= 0);
+    struct log_row row;
+    CHECK(log_row_parse(b, &row));
+    CHECK(row.producer_id == 2 && row.sequence == 3);
+    CHECK(row.enqueue_seq == 4 && row.dequeue_seq == 5);
+    CHECK(row.enqueue_time_ns == 900 && row.occupancy == 6);
+    CHECK(row.checksum == 0xabcd && row.payload_ok == 1);
+
+    /* Un detail al límite (47 caracteres) también se lee entero. */
+    char longtext[100];
+    memset(longtext, 'z', sizeof(longtext) - 1);
+    longtext[99] = '\0';
+    csv_record_event(&r, CSV_LEAVE, 1, longtext);
+    CHECK(csv_format_row(b, sizeof(b), CSV_PRODUCER, 1, &r) >= 0);
+    CHECK(log_row_parse(b, &row));
+    CHECK(strlen(row.detail) == CSV_DETAIL_MAX - 1);
     return true;
 }
 
@@ -246,6 +291,7 @@ int main(void) {
     struct test_case tests[] = {
         {"rows_follow_d12", test_rows_follow_d12},
         {"every_row_has_13_columns", test_every_row_has_13_columns},
+        {"verifier_reads_every_row", test_verifier_reads_every_row},
         {"role_mismatch_rejected", test_role_mismatch_rejected},
         {"buffer_too_small", test_buffer_too_small},
         {"detail_sanitized_and_truncated", test_detail_sanitized_and_truncated},
