@@ -1534,3 +1534,62 @@ tamaño y el layout del segmento. `memory_open` valida la versión (D13),
 así que un binario nuevo rechaza con `MEM_INCOMPATIBLE` una instancia
 creada por uno viejo, en vez de interpretar mal sus campos. Es
 exactamente para lo que existe ese campo.
+
+---
+
+## D19 — Implementación de la conexión y el registro (`src/participants.c`)
+
+- **Fecha:** 2026-10-22
+- **Issue:** [#12](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/12)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+D8 (registro de por vida) y D9 (puerta de conexión) fijan el diseño. Esta
+entrada registra lo que se agregó o precisó al implementarlo. Las
+operaciones de cierre de `participants.h` (`closing_*`) quedan para #16 y
+#17.
+
+### Decisiones de la implementación
+
+- **`instance_attach` = `memory_open` + CAS sobre `refs`.** Primero mapea y
+  valida (D13) sin tocar primitivas; después toma la referencia con
+  `atomic_compare_exchange_weak` mientras la puerta siga abierta. Con la
+  puerta cerrada desmapea y devuelve `ATTACH_CLOSING`.
+- **Dos resultados nuevos en `attach_result`:** `ATTACH_INVALID_NAME` y
+  `ATTACH_INCOMPATIBLE`, para no perder la distinción que ya hace
+  `memory_open` (D13). Se agregan `attach_result_str` y
+  `register_result_str` para los mensajes de los ejecutables.
+- **`sync_signal_all_left` en `sync.c`:** `instance_detach` tiene que
+  despertar al finisher con `signal(all_left)` bajo el mutex (D9). Como
+  `sync.c` es la única capa que toca condvars (D3), se agrega ahí esa
+  función, con la política de errores de D18, en vez de llamar a
+  `pthread_cond_signal` desde este módulo.
+- **El registro sigue el orden de D8** (estado, duplicado, espacio) en una
+  sola región crítica. La búsqueda de duplicados recorre también las
+  casillas `SLOT_LEFT`: el id queda reservado de por vida. Un rechazo no
+  escribe la tabla, los contadores ni `*slot`.
+- **`participant_leave` aborta ante una casilla inválida o ya retirada.**
+  Retirarse dos veces descontaría de más `active_*`, y el finisher podría
+  cerrar antes de tiempo o esperar para siempre. Es un error de quien
+  programa, así que sigue la política de D18 (mensaje y `abort`) en vez de
+  devolver un código que nadie revisaría.
+
+### Cómo se prueba la concurrencia
+
+Además de los casos unitarios, `test_participants` corre procesos reales:
+
+- **32 productores y 32 consumidores registrándose a la vez** con ids
+  únicos: todos entran y cada id aparece una sola vez por rol.
+- **16 procesos intentando registrar los mismos 64 ids**, soltados a la
+  vez con una largada por pipe (crear procesos tarda lo suficiente para
+  que, sin ella, casi nunca coincidan). Cada id tiene que quedar con un
+  solo dueño.
+- **El despertar del finisher:** la conexión del trabajador se toma antes
+  del `fork` y el hijo la hereda, así el padre siempre llega a dormir en
+  `all_left` con el predicado de D9.
+
+Verificado por mutación: liberar el id al retirarse, quitar el mutex del
+registro y quitar el `signal` de `instance_detach` hacen fallar,
+respectivamente, `duplicate_after_leave`, `concurrent_duplicate_race` (3
+de 3 intentos) y `detach_wakes_waiter` (por la alarma de 10 s).
