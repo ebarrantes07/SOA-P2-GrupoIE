@@ -52,6 +52,31 @@ void sync_broadcast_all(struct instance *inst);
  * (D3). Misma politica de errores que el resto (D18). */
 void sync_signal_all_left(struct instance *inst);
 
+/* ---- Pausa interrumpible por el cierre (#13) --------------------------- */
+
+enum pause_result {
+    PAUSE_COMPLETED = 0,   /* se cumplio el plazo con la instancia en OPEN */
+    PAUSE_INTERRUPTED      /* la instancia dejo OPEN: salir sin insertar */
+};
+
+/* Duerme `ms` milisegundos sobre la condvar `closing`, despertando antes
+ * si la instancia deja de estar OPEN. Es la pausa simulada del productor
+ * (D10): una espera con plazo y no un nanosleep ciego, para que el corte
+ * la interrumpa.
+ *
+ * Se llama SIN el mutex; la funcion lo toma y lo suelta. El plazo se
+ * cuenta desde la llamada, no desde que se consigue el mutex.
+ *
+ * Duerme solo en `closing`, nunca en not_full ni not_empty: ahi robaria
+ * un signal destinado a un proceso bloqueado por espacio o datos (D3,
+ * D18). El tiempo de esta pausa NO es espera de sincronizacion y no se
+ * acumula en op_snapshot (D11).
+ *
+ * Con `ms` no positivo (o NaN) no espera: solo informa el estado. El
+ * caso --mean-ms 0 lo resuelve el llamador sin llamar aqui (ver rng.h).
+ */
+enum pause_result sync_pause_ms(struct instance *inst, double ms);
+
 /* ---- Operaciones bloqueantes sobre el buffer --------------------------- */
 
 /* Datos capturados DENTRO de la region critica para que el llamador los

@@ -8,6 +8,7 @@
  */
 #include "sync.h"
 #include "buffer.h"
+#include "clock.h"
 #include "memory.h"
 #include "test_util.h"
 
@@ -32,6 +33,8 @@ struct flags {
     int go;
     int started;
     int done;
+    int pause_result;
+    unsigned long long pause_ms;
     unsigned long long wait_ns;
     unsigned wait_count;
 };
@@ -593,6 +596,133 @@ static bool test_many_processes_conserve_every_message(void) {
     return true;
 }
 
+/* ---- Pausa interrumpible (#13, D20) ----------------------------------- */
+
+/* La pausa tiene que durar de verdad. Esta prueba es la regresion del
+ * problema del reloj: si el plazo se leyera de un reloj distinto al de la
+ * condvar, timedwait devolveria ETIMEDOUT al instante y la pausa medirla
+ * 0 ms en vez de los 120 pedidos. */
+static bool test_pause_actually_waits(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("pause", 4, &name, &len);
+    CHECK(inst != NULL);
+
+    /* Si el plazo se leyera de un reloj POSTERIOR al de la condvar, la
+     * espera duraria decadas: la alarma convierte el cuelgue en falla. */
+    alarm(15);
+    uint64_t t0 = now_monotonic_ns();
+    CHECK(sync_pause_ms(inst, 120.0) == PAUSE_COMPLETED);
+    uint64_t ms = (now_monotonic_ns() - t0) / 1000000ull;
+    alarm(0);
+
+    CHECK(ms >= 100);        /* no se evaporo */
+    CHECK(ms < 2000);        /* ni se fue de largo */
+
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
+/* Con la instancia ya fuera de OPEN no hay nada que esperar. */
+static bool test_pause_skips_when_already_closing(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("pskip", 4, &name, &len);
+    CHECK(inst != NULL);
+
+    sync_lock(inst);
+    inst->state = STATE_CLOSING;
+    sync_unlock(inst);
+
+    alarm(15);
+    uint64_t t0 = now_monotonic_ns();
+    CHECK(sync_pause_ms(inst, 5000.0) == PAUSE_INTERRUPTED);
+    CHECK((now_monotonic_ns() - t0) / 1000000ull < 500);   /* no durmio los 5 s */
+    alarm(0);
+
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
+/* Una duracion no positiva no espera (el caso --mean-ms 0 lo resuelve el
+ * llamador, pero la funcion no debe quedar indefinida). */
+static bool test_pause_zero_does_not_wait(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("pzero", 4, &name, &len);
+    CHECK(inst != NULL);
+
+    alarm(15);
+    uint64_t t0 = now_monotonic_ns();
+    CHECK(sync_pause_ms(inst, 0.0) == PAUSE_COMPLETED);
+    CHECK(sync_pause_ms(inst, -5.0) == PAUSE_COMPLETED);
+    CHECK((now_monotonic_ns() - t0) / 1000000ull < 500);
+    alarm(0);
+
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
+/* El criterio central del #13: un cierre pedido durante la pausa la corta
+ * y el productor sale sin insertar. El hijo pide 5 s y debe salir en
+ * mucho menos. */
+static bool test_pause_interrupted_by_closing(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("pint", 4, &name, &len);
+    CHECK(inst != NULL);
+
+    struct flags *f = flags_create();
+    CHECK(f != NULL);
+
+    pid_t pid = fork();
+    CHECK(pid != -1);
+    if (pid == 0) {
+        alarm(15);
+        struct instance *mine;
+        size_t mlen;
+        if (memory_open(name, &mine, &mlen) != MEM_OK) {
+            _exit(2);
+        }
+        f->started = 1;
+        uint64_t t0 = now_monotonic_ns();
+        enum pause_result r = sync_pause_ms(mine, 5000.0);
+        f->pause_ms = (now_monotonic_ns() - t0) / 1000000ull;
+        f->pause_result = (int)r;
+        f->done = 1;
+        memory_unmap(mine, mlen);
+        _exit(0);
+    }
+
+    while (!f->started) {
+        struct timespec ms = {0, 1000000};
+        nanosleep(&ms, NULL);
+    }
+    struct timespec settle = {0, 100 * 1000000};   /* que entre a la pausa */
+    nanosleep(&settle, NULL);
+    CHECK(f->done == 0);                           /* sigue pausado */
+
+    sync_lock(inst);
+    inst->state = STATE_CLOSING;
+    sync_broadcast_all(inst);
+    sync_unlock(inst);
+
+    int status;
+    CHECK(waitpid(pid, &status, 0) == pid);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(f->done == 1);
+    CHECK(f->pause_result == (int)PAUSE_INTERRUPTED);
+    CHECK(f->pause_ms < 2000);      /* pidio 5000: salio mucho antes */
+
+    munmap(f, sizeof(*f));
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
 int main(void) {
     struct test_case tests[] = {
         {"broadcast_all_succeeds", test_broadcast_all_succeeds},
@@ -606,6 +736,10 @@ int main(void) {
         {"snapshot_without_contention", test_snapshot_without_contention},
         {"put_blocks_and_counts_the_wait", test_put_blocks_and_counts_the_wait},
         {"many_processes_conserve_every_message", test_many_processes_conserve_every_message},
+        {"pause_actually_waits", test_pause_actually_waits},
+        {"pause_skips_when_already_closing", test_pause_skips_when_already_closing},
+        {"pause_zero_does_not_wait", test_pause_zero_does_not_wait},
+        {"pause_interrupted_by_closing", test_pause_interrupted_by_closing},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;
