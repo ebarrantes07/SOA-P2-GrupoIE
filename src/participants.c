@@ -166,3 +166,61 @@ void participant_leave(struct instance *inst, enum role role, int slot,
     (*active_of(inst, role))--;
     sync_unlock(inst);
 }
+
+/* ---- Cierre: corte a CLOSING (D10, #16) ------------------------------- */
+
+const char *close_result_str(enum close_result r) {
+    switch (r) {
+    case CLOSE_OK:              return "ok";
+    case CLOSE_NO_CONSUMER:     return "no hay consumidores registrados y queda trabajo pendiente";
+    case CLOSE_ALREADY_CLOSING: return "ya hay un cierre en curso";
+    }
+    return "resultado desconocido";
+}
+
+enum close_result closing_begin(struct instance *inst,
+                                struct close_snapshot *snap) {
+    if (snap != NULL) {
+        *snap = (struct close_snapshot){0};
+    }
+
+    sync_lock(inst);
+
+    /* El finalizador unico no necesita una bandera aparte: la transicion
+     * misma es la reserva. El primero que la hace conduce el cierre;
+     * cualquier otro ve que ya no esta en OPEN (D10). */
+    if (inst->state != STATE_OPEN) {
+        sync_unlock(inst);
+        return CLOSE_ALREADY_CLOSING;
+    }
+
+    /* Precondicion de D10: hace falta al menos un consumidor activo,
+     * salvo que no quede nada por drenar. Un rechazo no toca nada: la
+     * instancia sigue OPEN y se puede reintentar tras levantar un
+     * consumidor. */
+    if (inst->active_consumers == 0 &&
+        (inst->active_producers > 0 || inst->count > 0)) {
+        sync_unlock(inst);
+        return CLOSE_NO_CONSUMER;
+    }
+
+    inst->state = STATE_CLOSING;                      /* <-- punto de corte */
+    atomic_fetch_or(&inst->refs, REFS_GATE_CLOSED);   /* D9: no mas conexiones */
+    uint64_t now = now_monotonic_ns();
+    inst->metrics.closing_start_ns = now;
+
+    /* Capturado aca dentro a proposito: afuera estos tres numeros ya son
+     * de otro instante (ver struct close_snapshot). */
+    if (snap != NULL) {
+        snap->accepted = inst->enqueue_seq;
+        snap->extracted = inst->dequeue_seq;
+        snap->pending = inst->count;
+        snap->closing_ns = now;
+    }
+
+    /* El corte vuelve falso el predicado de todos los que esperan, asi
+     * que va broadcast y no signal (D3). Incluye la condvar de la pausa. */
+    sync_broadcast_all(inst);
+    sync_unlock(inst);
+    return CLOSE_OK;
+}

@@ -117,12 +117,37 @@ enum close_result {
     CLOSE_ALREADY_CLOSING   /* otro finisher ya condujo el corte */
 };
 
+const char *close_result_str(enum close_result r);
+
+/* Lo que vale en el punto de corte. Existe porque D12 pide esos tres
+ * numeros "en el punto de corte" para la fila CLOSING del CSV, y despues
+ * de soltar el mutex ya no se pueden obtener: los consumidores siguen
+ * drenando (D10), asi que `extracted` crece y `pending` baja. Leerlos
+ * afuera sin el mutex ademas los deja mutuamente inconsistentes, porque
+ * las dos lecturas no son atomicas entre si.
+ *
+ * Mismo patron que struct op_snapshot en sync.h, y por la misma razon:
+ * capturar bajo proteccion y escribir despues. */
+struct close_snapshot {
+    uint64_t accepted;     /* enqueue_seq: aceptados hasta el corte */
+    uint64_t extracted;    /* dequeue_seq: extraidos hasta el corte */
+    uint32_t pending;      /* count: en el buffer al cortar */
+    uint64_t closing_ns;   /* la marca guardada en metrics.closing_start_ns */
+};
+
 /* Bajo el mutex, en una sola región crítica: evalúa la precondición
  * (active_consumers >= 1, o active_producers == 0 && count == 0); si se
  * cumple pasa a CLOSING, cierra la puerta de conexión, guarda
  * metrics.closing_start_ns y hace sync_broadcast_all(). Este cambio de
- * estado es el punto de corte para put y para el registro. */
-enum close_result closing_begin(struct instance *inst);
+ * estado es el punto de corte para put y para el registro.
+ *
+ * `snap` puede ser NULL si al llamador no le interesan los numeros del
+ * corte (los necesita el ejecutable para la fila CLOSING, no #17). Si no
+ * es NULL se pone en cero al entrar, asi que queda definido en cualquier
+ * camino; un rechazo lo deja en cero, porque D12 no pide numeros en la
+ * fila CLOSE_REJECTED. */
+enum close_result closing_begin(struct instance *inst,
+                                struct close_snapshot *snap);
 
 /* Toma el mutex y duerme en all_left mientras (refs & REFS_COUNT_MASK) > 1,
  * es decir, mientras quede alguien conectado además del propio finisher.

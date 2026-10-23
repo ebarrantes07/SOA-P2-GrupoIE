@@ -7,6 +7,7 @@
 #include "sync.h"
 #include "test_util.h"
 
+#include <stdatomic.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -359,6 +360,178 @@ static bool test_detach_wakes_waiter(void) {
     return true;
 }
 
+/* ---- Corte a CLOSING (D10, #16) --------------------------------------- */
+
+/* La precondicion de D10 tiene cuatro combinaciones y la expresion es
+ * facil de leer mal, asi que van las cuatro. */
+static bool test_closing_precondition_with_consumer(void) {
+    const char *name = name_for("cl_ok");
+    struct instance *inst;
+    size_t len;
+    CHECK(make_instance(name, &inst, &len));
+    int slot;
+    CHECK(participant_register(inst, ROLE_CONSUMER, 1, &slot) == REG_OK);
+
+    struct close_snapshot snap;
+    CHECK(closing_begin(inst, &snap) == CLOSE_OK);
+    CHECK(inst->state == STATE_CLOSING);
+    CHECK(inst->metrics.closing_start_ns > 0);
+    CHECK(snap.closing_ns == inst->metrics.closing_start_ns);
+
+    done(name, inst, len);
+    return true;
+}
+
+/* Sin nadie y sin pendientes se puede cerrar: no queda nada por drenar. */
+static bool test_closing_precondition_with_nothing_pending(void) {
+    const char *name = name_for("cl_emp");
+    struct instance *inst;
+    size_t len;
+    CHECK(make_instance(name, &inst, &len));
+
+    CHECK(inst->active_producers == 0 && inst->active_consumers == 0);
+    CHECK(inst->count == 0);
+    CHECK(closing_begin(inst, NULL) == CLOSE_OK);      /* snapshot opcional */
+    CHECK(inst->state == STATE_CLOSING);
+
+    done(name, inst, len);
+    return true;
+}
+
+/* Un productor activo y ningun consumidor: nadie sacaria lo que inserte. */
+static bool test_closing_rejects_producer_without_consumer(void) {
+    const char *name = name_for("cl_np");
+    struct instance *inst;
+    size_t len;
+    CHECK(make_instance(name, &inst, &len));
+    int slot;
+    CHECK(participant_register(inst, ROLE_PRODUCER, 1, &slot) == REG_OK);
+
+    struct close_snapshot snap;
+    memset(&snap, 0xAA, sizeof(snap));                 /* basura previa */
+    CHECK(closing_begin(inst, &snap) == CLOSE_NO_CONSUMER);
+
+    /* Un rechazo no toca nada: la instancia sigue utilizable. */
+    CHECK(inst->state == STATE_OPEN);
+    CHECK(inst->metrics.closing_start_ns == 0);
+    CHECK((atomic_load(&inst->refs) & REFS_GATE_CLOSED) == 0);
+    CHECK(snap.accepted == 0 && snap.extracted == 0 && snap.pending == 0);
+
+    /* Y se puede reintentar tras levantar un consumidor (D10). */
+    CHECK(participant_register(inst, ROLE_CONSUMER, 1, &slot) == REG_OK);
+    CHECK(closing_begin(inst, NULL) == CLOSE_OK);
+
+    done(name, inst, len);
+    return true;
+}
+
+/* Sin participantes pero con mensajes en el buffer: tampoco se cierra,
+ * porque esos mensajes no los sacaria nadie. */
+static bool test_closing_rejects_pending_without_consumer(void) {
+    const char *name = name_for("cl_pend");
+    struct instance *inst;
+    size_t len;
+    CHECK(make_instance(name, &inst, &len));
+
+    struct message m = {0};
+    m.producer_id = 1;
+    m.sequence = 1;
+    CHECK(sync_put(inst, &m, NULL) == PUT_OK);         /* no exige registro */
+    CHECK(inst->count == 1);
+    CHECK(inst->active_producers == 0);
+
+    CHECK(closing_begin(inst, NULL) == CLOSE_NO_CONSUMER);
+    CHECK(inst->state == STATE_OPEN);
+
+    done(name, inst, len);
+    return true;
+}
+
+/* El finalizador unico sin bandera extra: la transicion es la reserva. */
+static bool test_closing_second_call_rejected(void) {
+    const char *name = name_for("cl_2nd");
+    struct instance *inst;
+    size_t len;
+    CHECK(make_instance(name, &inst, &len));
+
+    struct close_snapshot first, second;
+    CHECK(closing_begin(inst, &first) == CLOSE_OK);
+    memset(&second, 0xAA, sizeof(second));
+    CHECK(closing_begin(inst, &second) == CLOSE_ALREADY_CLOSING);
+    CHECK(second.accepted == 0 && second.pending == 0);   /* quedo en cero */
+    CHECK(inst->metrics.closing_start_ns == first.closing_ns);  /* no se piso */
+
+    done(name, inst, len);
+    return true;
+}
+
+/* El corte cierra la puerta: nadie mas se conecta (D9). */
+static bool test_closing_closes_the_gate(void) {
+    const char *name = name_for("cl_gate");
+    struct instance *inst;
+    size_t len;
+    CHECK(make_instance(name, &inst, &len));
+
+    struct instance *otro;
+    size_t ol;
+    CHECK(instance_attach(name, &otro, &ol) == ATTACH_OK);   /* antes: entra */
+    instance_detach(otro, ol);
+
+    CHECK(closing_begin(inst, NULL) == CLOSE_OK);
+    CHECK(instance_attach(name, &otro, &ol) == ATTACH_CLOSING);   /* despues: no */
+
+    done(name, inst, len);
+    return true;
+}
+
+/* El punto de este slice: el snapshot describe el corte, y sigue
+ * describiendolo aunque los consumidores sigan drenando despues. */
+static bool test_closing_snapshot_describes_the_cut(void) {
+    const char *name = name_for("cl_snap");
+    struct instance *inst;
+    size_t len;
+    CHECK(make_instance(name, &inst, &len));
+    int slot;
+    CHECK(participant_register(inst, ROLE_CONSUMER, 1, &slot) == REG_OK);
+
+    for (uint64_t i = 1; i <= 4; i++) {        /* capacidad 4: se llena */
+        struct message m = {0};
+        m.producer_id = 1;
+        m.sequence = i;
+        CHECK(sync_put(inst, &m, NULL) == PUT_OK);
+    }
+    struct message out;
+    CHECK(sync_get(inst, &out, NULL) == GET_OK);
+    CHECK(sync_get(inst, &out, NULL) == GET_OK);
+
+    struct close_snapshot snap;
+    CHECK(closing_begin(inst, &snap) == CLOSE_OK);
+    CHECK(snap.accepted == 4);
+    CHECK(snap.extracted == 2);
+    CHECK(snap.pending == 2);
+    CHECK(snap.accepted == snap.extracted + snap.pending);   /* lo que audita #7 */
+
+    /* El consumidor sigue drenando en CLOSING (D10) y el segmento cambia,
+     * pero el snapshot es una copia: no se mueve. */
+    CHECK(sync_get(inst, &out, NULL) == GET_OK);
+    CHECK(inst->dequeue_seq == 3 && inst->count == 1);
+    CHECK(snap.extracted == 2 && snap.pending == 2);
+
+    done(name, inst, len);
+    return true;
+}
+
+static bool test_close_result_str(void) {
+    const enum close_result rs[] = {CLOSE_OK, CLOSE_NO_CONSUMER,
+                                    CLOSE_ALREADY_CLOSING};
+    for (size_t i = 0; i < sizeof(rs) / sizeof(rs[0]); i++) {
+        const char *m = close_result_str(rs[i]);
+        CHECK(m != NULL && m[0] != '\0');
+        CHECK(strstr(m, "desconocido") == NULL);
+    }
+    return true;
+}
+
 int main(void) {
     struct test_case tests[] = {
         {"register_basic", test_register_basic},
@@ -372,6 +545,14 @@ int main(void) {
         {"concurrent_registration", test_concurrent_registration},
         {"concurrent_duplicate_race", test_concurrent_duplicate_race},
         {"detach_wakes_waiter", test_detach_wakes_waiter},
+        {"closing_precondition_with_consumer", test_closing_precondition_with_consumer},
+        {"closing_precondition_with_nothing_pending", test_closing_precondition_with_nothing_pending},
+        {"closing_rejects_producer_without_consumer", test_closing_rejects_producer_without_consumer},
+        {"closing_rejects_pending_without_consumer", test_closing_rejects_pending_without_consumer},
+        {"closing_second_call_rejected", test_closing_second_call_rejected},
+        {"closing_closes_the_gate", test_closing_closes_the_gate},
+        {"closing_snapshot_describes_the_cut", test_closing_snapshot_describes_the_cut},
+        {"close_result_str", test_close_result_str},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;
