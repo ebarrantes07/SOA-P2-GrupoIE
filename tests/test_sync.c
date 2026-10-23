@@ -723,6 +723,149 @@ static bool test_pause_interrupted_by_closing(void) {
     return true;
 }
 
+/* ---- El despertar no se roba (revision de #29) ------------------------ */
+
+/* Escenario: buffer lleno, un productor bloqueado en not_full y varios en
+ * pausa larga. Al extraer un mensaje, el bloqueado tiene que insertar sin
+ * esperar a que termine la pausa de los otros.
+ *
+ * Es la prueba que justifica que la pausa tenga condvar propia. Si
+ * durmiera en not_full, el unico signal que emite sync_get podria
+ * despertar a un productor en pausa, que ve su plazo sin vencer y vuelve
+ * a dormirse: el bloqueado por espacio se queda esperando con lugar
+ * disponible. Con varios en pausa, la probabilidad de que el signal se
+ * desvie es alta y el robo se nota. */
+
+enum { PAUSERS = 4 };
+
+struct steal_flags {
+    int paused_started[PAUSERS];
+    int paused_done[PAUSERS];
+    int blocker_started;
+    int blocker_done;
+    unsigned long long blocker_ms;
+    int blocker_ok;
+};
+
+static struct steal_flags *steal_create(void) {
+    void *p = mmap(NULL, sizeof(struct steal_flags), PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        return NULL;
+    }
+    struct steal_flags *f = p;
+    *f = (struct steal_flags){0};
+    return f;
+}
+
+static bool test_pause_does_not_steal_the_wakeup(void) {
+    const char *name;
+    size_t len;
+    struct instance *inst = open_instance("steal", 1, &name, &len);   /* capacidad 1 */
+    CHECK(inst != NULL);
+
+    struct message first = msg_with(1, 1);
+    CHECK(sync_put(inst, &first, NULL) == PUT_OK);
+    CHECK(buffer_is_full(inst));
+
+    struct steal_flags *f = steal_create();
+    CHECK(f != NULL);
+
+    pid_t paused[PAUSERS], blocker;
+
+    for (int i = 0; i < PAUSERS; i++) {
+        paused[i] = fork();
+        CHECK(paused[i] != -1);
+        if (paused[i] == 0) {
+            alarm(20);
+            struct instance *mine;
+            size_t ml;
+            if (memory_open(name, &mine, &ml) != MEM_OK) {
+                _exit(2);
+            }
+            f->paused_started[i] = 1;
+            sync_pause_ms(mine, 5000.0);      /* pausa larga */
+            f->paused_done[i] = 1;
+            memory_unmap(mine, ml);
+            _exit(0);
+        }
+    }
+
+    blocker = fork();
+    CHECK(blocker != -1);
+    if (blocker == 0) {
+        alarm(20);
+        struct instance *mine;
+        size_t ml;
+        if (memory_open(name, &mine, &ml) != MEM_OK) {
+            _exit(2);
+        }
+        struct message m = msg_with(2, 1);
+        f->blocker_started = 1;
+        uint64_t t0 = now_monotonic_ns();
+        enum put_result r = sync_put(mine, &m, NULL);   /* bloquea: lleno */
+        f->blocker_ms = (now_monotonic_ns() - t0) / 1000000ull;
+        f->blocker_ok = (r == PUT_OK);
+        f->blocker_done = 1;
+        memory_unmap(mine, ml);
+        _exit(0);
+    }
+
+    /* Esperar a que los seis esten en posicion. */
+    for (;;) {
+        int listos = f->blocker_started;
+        for (int i = 0; i < PAUSERS; i++) {
+            listos += f->paused_started[i];
+        }
+        if (listos == PAUSERS + 1) {
+            break;
+        }
+        struct timespec ms = {0, 1000000};
+        nanosleep(&ms, NULL);
+    }
+    struct timespec settle = {0, 150 * 1000000};
+    nanosleep(&settle, NULL);                  /* que lleguen a dormirse */
+    CHECK(f->blocker_done == 0);               /* sigue bloqueado por espacio */
+
+    /* Un solo get: libera una casilla y emite UN signal en not_full. */
+    struct message out;
+    CHECK(sync_get(inst, &out, NULL) == GET_OK);
+
+    int st;
+    CHECK(waitpid(blocker, &st, 0) == blocker);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    CHECK(f->blocker_done == 1);
+    CHECK(f->blocker_ok);                      /* inserto */
+    CHECK(f->blocker_ms < 2000);               /* no espero los 5 s de las pausas */
+
+    /* Y las pausas seguian corriendo: el escenario era el que se queria. */
+    int pausas_terminadas = 0;
+    for (int i = 0; i < PAUSERS; i++) {
+        pausas_terminadas += f->paused_done[i];
+    }
+    CHECK(pausas_terminadas == 0);
+
+    /* Soltar a los que estan en pausa. */
+    sync_lock(inst);
+    inst->state = STATE_CLOSING;
+    sync_broadcast_all(inst);
+    sync_unlock(inst);
+
+    bool ok = true;
+    for (int i = 0; i < PAUSERS; i++) {
+        if (waitpid(paused[i], &st, 0) != paused[i] || !WIFEXITED(st) ||
+            WEXITSTATUS(st) != 0) {
+            ok = false;
+        }
+    }
+    CHECK(ok);
+
+    munmap(f, sizeof(*f));
+    memory_unmap(inst, len);
+    CHECK(memory_unlink(name) == 0);
+    return true;
+}
+
 int main(void) {
     struct test_case tests[] = {
         {"broadcast_all_succeeds", test_broadcast_all_succeeds},
@@ -740,6 +883,7 @@ int main(void) {
         {"pause_skips_when_already_closing", test_pause_skips_when_already_closing},
         {"pause_zero_does_not_wait", test_pause_zero_does_not_wait},
         {"pause_interrupted_by_closing", test_pause_interrupted_by_closing},
+        {"pause_does_not_steal_the_wakeup", test_pause_does_not_steal_the_wakeup},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;
