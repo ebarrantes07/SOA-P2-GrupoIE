@@ -1895,3 +1895,60 @@ contrario: el `% 256` solo mira el byte bajo de la suma, y el desborde de un
 `unsigned` envuelve sin alterarlo, así que hacer la aritmética en 32 bits da
 exactamente los mismos bytes. El `uint64_t` queda por claridad de lectura, no
 por corrección, y el comentario ahora lo dice así.
+
+---
+
+## D23 — Ejecutable `consumer`
+
+- **Fecha:** 2026-10-24
+- **Issue:** [#15](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/15)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+El consumer usa el módulo de payload de D22 (#44) para escribir
+`payload_ok` (D12): después de cada `sync_get` llama a `payload_verify`,
+fuera de la región crítica. No trae implementación propia del checksum.
+
+### Flujo del consumer
+
+1. **Valida argumentos** (D15) y **abre su CSV antes de conectarse**, para
+   que también quede registro de un rechazo.
+2. **Se conecta y se registra** (D9, D8). Un fallo escribe `JOIN_REJECTED`
+   con el motivo de D12 (`not_found`, `closing`, `duplicate_id`,
+   `not_open`, `table_full`) y sale con código 1, sin dejar recursos.
+3. **Repite:** `sync_get` bloqueante (D3) → `payload_verify` (D22) → fila `GET`
+   → procesamiento simulado → fila `PROCESSED`. Todo lo posterior a
+   `sync_get` ocurre sin el mutex.
+4. **`GET_DRAINED`** (CLOSING y buffer vacío, D10) → fila `DRAINED`,
+   `participant_leave` con sus métricas, fila `LEAVE` (`drained`),
+   `instance_detach`.
+
+### Decisiones
+
+- **El procesamiento simulado no se interrumpe con el cierre**, a
+  diferencia de la pausa del productor (D20): el enunciado pide que el
+  consumidor termine el procesamiento de lo que ya retiró. Es un
+  `nanosleep` que se reanuda si una señal lo corta. Con `--mean-ms 0` no
+  se llama al muestreo.
+- **Un error de escritura del CSV no corta la corrida.** Se recuerda el
+  primero y se reporta al final con código 1. Si el consumidor abandonara
+  a mitad de camino, dejaría mensajes sin drenar y su referencia de
+  conexión tomada, y el finisher esperaría para siempre.
+- **La espera final en vacío se acumula** en `wait_ns`, como declara D11
+  (espera combinada).
+- **No se usan señales de terminación como mecanismo normal de salida**
+  (el enunciado lo prohíbe): el consumer termina solo por `GET_DRAINED` o
+  por un rechazo al entrar.
+
+### Pruebas de punta a punta
+
+`test_consumer` lanza `./consumer` como proceso real; la prueba hace de
+productor y de finisher con sus propios CSV, y al final pasa los archivos
+por `./verify` (D16). El payload de cada mensaje se arma con
+`payload_build` (D22), igual que lo hará el producer. Cubre: corrida verificada, espera bloqueada con el
+buffer vacío, drenaje completo después del corte (con pendientes en el
+snapshot), cuatro consumidores, id duplicado, instancia inexistente,
+conexión después del cierre y payload alterado. Verificado por mutación:
+dejar `payload_ok` siempre en 1, salir al ver el buffer vacío y salir al
+ver CLOSING sin drenar hacen fallar las pruebas correspondientes.

@@ -72,6 +72,17 @@ Crea e inicializa la instancia y termina con código 0 cuando ya acepta particip
 nombre es `/` seguido de 1 a 30 caracteres `[A-Za-z0-9_-]` y la capacidad va de 1 a 1024.
 Si ya existe una instancia con ese nombre, la rechaza sin modificarla (código 1).
 
+### consumer
+
+```bash
+./consumer --name /soa_p2_g1 --id 1 --mean-ms 10 --seed 11 --log results/c1.csv
+```
+
+Se registra, extrae mensajes en orden FIFO (esperando bloqueado si el buffer está vacío), verifica
+el contenido de cada uno y simula su procesamiento con pausas exponenciales de media `--mean-ms`.
+Termina solo cuando la instancia está cerrándose y ya no quedan mensajes, después de procesar todo
+lo que retiró. Cada evento queda en su CSV (formato en `docs/decisiones_diseno.md`, D12).
+
 ### Opciones
 
 | Opción | creator | producer | consumer | finisher | Valor |
