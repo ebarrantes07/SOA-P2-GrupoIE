@@ -1500,6 +1500,28 @@ Dos detalles que es fácil equivocar:
 - **Chequeo explícito, no `assert`.** Con `-DNDEBUG` el `assert`
   desaparece y el fallo pasaría en silencio. Es la misma lección del fix
   de `now_monotonic_ns` en #34.
+
+### Cuándo un error de programación también aborta
+
+Ampliación agregada en #13 a partir de la revisión de #41. Lo escrito
+arriba se leía como "fallo de primitiva → `abort`, error de quien
+programa → `assert`", y con esa lectura el `abort` de
+`participant_leave` (D19) parecía contradecir esta entrada. No la
+contradice: **el criterio no es quién se equivocó, sino qué pasa si el
+error no se detecta en un build de release.**
+
+- Los `assert` de `buffer.c` y `metrics.c` protegen cosas que, sin ellos,
+  revientan igual al instante: un índice fuera de rango, un módulo por
+  cero. Compilarlos afuera no esconde nada, el programa muere de todos
+  modos.
+- Un doble `participant_leave`, en cambio, descuenta `active_*` de más y
+  **no revienta**: el finisher se queda esperando para siempre o cierra
+  antes de tiempo. Sin mensaje, sin crash, con resultados mal.
+
+Entonces: un error de quien programa también aborta, en vez de quedar en
+un `assert`, cuando su consecuencia silenciosa en release sería un
+cuelgue, un resultado incorrecto o una pérdida de datos, y no un crash
+inmediato.
 - **`strerror(rc)` y no `perror`.** A diferencia de las llamadas al
   sistema, las funciones `pthread_*` **no usan `errno`**: devuelven el
   código de error directamente. Usar `perror` ahí imprimiría el `errno`
@@ -1593,6 +1615,91 @@ Verificado por mutación: liberar el id al retirarse, quitar el mutex del
 registro y quitar el `signal` de `instance_detach` hacen fallar,
 respectivamente, `duplicate_after_leave`, `concurrent_duplicate_race` (3
 de 3 intentos) y `detach_wakes_waiter` (por la alarma de 10 s).
+
+---
+
+## D20 — Pausa interrumpible por el cierre (`sync_pause_ms`)
+
+- **Fecha:** 2026-10-22
+- **Issue:** [#13](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/13)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+El enunciado pide que el productor pause entre intentos para simular
+trabajo, y que un cierre solicitado durante esa pausa lo saque de ella
+sin insertar otro mensaje. D10 ya fijaba que la pausa duerme en la
+condvar dedicada `closing` y que el `broadcast` del corte la interrumpe;
+D11 fijó que ese tiempo **no** es espera de sincronización y no entra en
+`wait_ns`. Falta la forma concreta.
+
+### Decisión
+
+```c
+enum pause_result { PAUSE_COMPLETED = 0, PAUSE_INTERRUPTED };
+enum pause_result sync_pause_ms(struct instance *inst, double ms);
+```
+
+- **Recibe la duración ya muestreada, no la media.** El muestreo
+  exponencial es del productor (`rng_exponential_ms`, #5); así esta capa
+  no depende del RNG y se prueba con duraciones fijas.
+- **Espera con plazo sobre `closing`**, dentro de un `while` que revisa
+  el estado y el vencimiento. `ETIMEDOUT` es el fin normal de la pausa, no
+  un error; cualquier otro código sigue la política de D18. Un `rc == 0`
+  puede ser un despertar espurio, y por eso el `while` reevalúa.
+- **Si el corte llega junto con el vencimiento se informa interrumpida.**
+  El productor no debe insertar, y `sync_put` lo rechazaría igual.
+- **Con `ms` no positivo o NaN no espera.** El caso `--mean-ms 0` lo
+  resuelve el llamador sin llamar acá (rng.h), pero dejar la función
+  total evita un camino indefinido: convertir un `double` negativo a
+  `uint64_t` es comportamiento indefinido en C.
+- **El plazo se fija antes de tomar el mutex**, así la pausa se cuenta
+  desde la llamada y no desde que se consiguió el bloqueo.
+
+### El plazo tiene que leerse del reloj de la condvar
+
+`pthread_cond_timedwait` no recibe una duración sino **un instante
+absoluto**, y lo compara contra el reloj con el que se configuró la
+condvar. `sync_init_primitives` solo llama a `pthread_condattr_setclock`
+si `SYNC_HAS_CONDATTR_SETCLOCK`, que en macOS vale 0 (D13).
+
+Si el plazo se calculara siempre con `CLOCK_MONOTONIC` —el reloj del
+resto del proyecto— en macOS se le pasaría a una condvar de
+`CLOCK_REALTIME` un instante de hace medio siglo: los dos relojes están
+separados por unos 1,79 × 10⁹ segundos. `timedwait` devolvería
+`ETIMEDOUT` de inmediato y **la pausa desaparecería sin un solo error**,
+porque `ETIMEDOUT` es justo el código del fin normal.
+
+Medido en Linux, pidiendo 300 ms y simulando cada configuración:
+
+| Condvar | Plazo | Duración real |
+|---|---|---|
+| `CLOCK_MONOTONIC` | `CLOCK_MONOTONIC` | 300 ms |
+| por defecto (macOS) | `CLOCK_MONOTONIC` | **0 ms** |
+| por defecto (macOS) | `CLOCK_REALTIME` | 300 ms |
+
+Por eso el reloj del plazo cuelga del **mismo** `#if` que decide el de la
+condvar, para que no puedan desalinearse:
+
+```c
+#if SYNC_HAS_CONDATTR_SETCLOCK
+#define SYNC_COND_CLOCK CLOCK_MONOTONIC
+#else
+#define SYNC_COND_CLOCK CLOCK_REALTIME
+#endif
+```
+
+Costo aceptado en macOS: la pausa queda sensible a un cambio de hora del
+sistema a mitad de corrida, que es justo lo que D3 quería evitar usando
+`CLOCK_MONOTONIC`. Pero "la pausa se desvía si alguien cambia la fecha"
+es preferible a "la pausa no existe", y solo afecta al entorno de
+desarrollo local, no al de referencia (D13).
+
+`test_pause_actually_waits` es la regresión de esto: mide que una pausa
+de 120 ms dure al menos 100. Con el acoplamiento roto a propósito, falla.
+Las pruebas de pausa llevan además una alarma, porque el desalineamiento
+inverso (condvar monotónica, plazo en tiempo real) no acortaría la espera
+sino que la volvería de décadas, y sin alarma `make test` colgaría.
 
 ---
 

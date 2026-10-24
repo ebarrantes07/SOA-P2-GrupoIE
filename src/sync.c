@@ -28,6 +28,23 @@
 #define SYNC_HAS_CONDATTR_SETCLOCK 0
 #endif
 
+/* pthread_cond_timedwait no recibe una duracion sino un instante
+ * absoluto, y lo compara contra el reloj con el que se configuro la
+ * condvar. Asi que el plazo hay que leerlo de ESE reloj, no del "reloj
+ * del proyecto": si la condvar quedo en CLOCK_REALTIME (macOS, donde el
+ * #if de arriba es 0) y el plazo se calcula con CLOCK_MONOTONIC, se le
+ * pasa un instante de los anos 70 y timedwait devuelve ETIMEDOUT de
+ * inmediato -- la pausa desaparece sin un solo error, porque ETIMEDOUT es
+ * justo el codigo del fin normal. Medido: 0 ms en vez de 300.
+ *
+ * Las dos decisiones cuelgan del mismo macro a proposito, para que no
+ * puedan desalinearse. Ver D20. */
+#if SYNC_HAS_CONDATTR_SETCLOCK
+#define SYNC_COND_CLOCK CLOCK_MONOTONIC
+#else
+#define SYNC_COND_CLOCK CLOCK_REALTIME   /* el que usa pthread_cond_init por defecto */
+#endif
+
 int sync_init_primitives(struct instance *inst) {
     pthread_mutexattr_t ma;
     pthread_condattr_t ca;
@@ -289,4 +306,51 @@ enum get_result sync_get(struct instance *inst, struct message *out,
     cond_signal_checked(&inst->not_full);
     sync_unlock(inst);
     return GET_OK;
+}
+
+/* ---- Pausa interrumpible por el cierre (#13, D20) --------------------- */
+
+/* Plazo absoluto a `ms` milisegundos de ahora, en el reloj de la condvar.
+ * Precondicion: ms > 0 y finito (lo garantiza sync_pause_ms). */
+static void deadline_from_now(struct timespec *out, double ms) {
+    clock_gettime(SYNC_COND_CLOCK, out);
+
+    uint64_t ns = (uint64_t)(ms * 1000000.0);
+    out->tv_sec += (time_t)(ns / 1000000000ull);
+    out->tv_nsec += (long)(ns % 1000000000ull);
+    if (out->tv_nsec >= 1000000000L) {
+        out->tv_sec += 1;
+        out->tv_nsec -= 1000000000L;
+    }
+}
+
+enum pause_result sync_pause_ms(struct instance *inst, double ms) {
+    /* El plazo se fija antes de pelear por el mutex: la pausa se cuenta
+     * desde la llamada. */
+    struct timespec deadline;
+    bool wait = (ms > 0.0);   /* falso tambien para NaN */
+    if (wait) {
+        deadline_from_now(&deadline, ms);
+    }
+
+    sync_lock(inst);
+
+    bool expired = false;
+    while (wait && !expired && inst->state == STATE_OPEN) {
+        int rc = pthread_cond_timedwait(&inst->closing, &inst->mutex, &deadline);
+        if (rc == ETIMEDOUT) {
+            expired = true;        /* fin normal de la pausa, no un error */
+        } else if (rc != 0) {
+            primitive_failed("pthread_cond_timedwait", rc);
+        }
+        /* rc == 0 puede ser un despertar espurio: el while reevalua el
+         * estado y el plazo. */
+    }
+
+    /* Si el corte llego junto con el vencimiento, se informa interrumpida:
+     * el productor no debe insertar, y sync_put lo rechazaria igual. */
+    enum pause_result r = (inst->state == STATE_OPEN) ? PAUSE_COMPLETED
+                                                      : PAUSE_INTERRUPTED;
+    sync_unlock(inst);
+    return r;
 }
