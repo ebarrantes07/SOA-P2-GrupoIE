@@ -1794,3 +1794,104 @@ cierre. Un `finisher` que pasara a CLOSING y terminara ahí dejaría la
 instancia en CLOSING para siempre, con las primitivas vivas y el objeto de
 `/dev/shm` presente: peor que no tener ejecutable. El binario llega con el
 #17.
+
+---
+
+## D22 — Módulo del payload verificable (`include/payload.h`)
+
+- **Fecha:** 2026-10-24
+- **Issue:** [#44](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/44)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+D1 especifica el payload verificable (`fill[i] = (producer_id + sequence + i)
+% 256` y FNV-1a de 32 bits sobre 28 bytes serializados campo por campo) y D12
+define la columna `payload_ok` como *"el consumidor recalculó `fill` y
+`checksum` y coinciden"*. Hasta este issue eso existía solo como prosa:
+`struct payload.checksum` estaba declarado, el logger lo copiaba y el
+verificador comparaba `PUT.checksum` contra `GET.checksum`, pero **nadie lo
+calculaba**.
+
+Los dos extremos lo necesitan: el productor (#14) al armar el mensaje y el
+consumidor (#15) al extraerlo. Esa dependencia no estaba registrada en el
+plan ni en los issues; apareció al arrancar el #14 y por eso el #44 se abrió
+después que los issues que desbloquea.
+
+### Decisión
+
+**Un solo módulo, `src/payload.c`, para los dos roles.** Con una
+implementación por ejecutable, las dos tendrían que coincidir byte a byte o
+todos los `payload_ok` saldrían en `0` en una corrida sana — un fallo que se
+vería recién al leer los CSV del experimento y que se diagnosticaría como
+corrupción de memoria compartida en vez de como dos hashes distintos.
+
+**`payload_checksum` recibe `fill` por separado** en vez de recalcularlo a
+partir de la identidad. El consumidor tiene que hashear el relleno que
+*realmente viajó* en el mensaje; si la función lo regenerara internamente, un
+`fill` corrupto produciría el mismo checksum que el sano y el chequeo no
+detectaría nada.
+
+**Serialización explícita y no un hash sobre la estructura.** `memcpy` de
+`sequence` (8 bytes) y `producer_id` (4) a un buffer local, y después los 16
+de `fill`. Hashear `&payload`/`sizeof(payload)` ataría el valor a cómo el
+compilador decida alinear y rellenar los campos. `_Static_assert` sobre
+`PAYLOAD_CHECKSUM_INPUT_LEN == 28` fija el número de D1 en el código.
+
+#### Alcance de `payload_ok`: tres chequeos, no uno
+
+| # | Chequeo | Qué detecta | Quién más podría detectarlo |
+|---|---|---|---|
+| 1 | Identidad del sobre contra las copias del payload | un mensaje cuyo payload pertenece a otra identidad | **nadie más**: el CSV de D12 tiene una sola columna `producer_id` y una sola `sequence`, así que si discrepan, el verificador ya no ve la diferencia |
+| 2 | `fill` byte a byte contra el esperado para esa identidad | contenido cambiado **con el checksum rehecho** | nadie |
+| 3 | Campo `checksum` contra el recalculado sobre el `fill` que viajó | el propio campo corrupto, o un payload nunca armado | el verificador, comparando `PUT.checksum` con `GET.checksum` |
+
+Entre los tres cubren los 32 bytes del payload: ninguno puede cambiar, tomando
+el sobre como referencia, sin que `payload_verify` devuelva `false`. El (2)
+parece redundante con el (3) — un `fill` corrupto ya rompe el checksum — y no
+lo es solo en un caso: contenido cambiado *y* checksum recalculado para que
+cuadre. La prueba `fill_from_another_identity_is_detected` es la que lo fija;
+sin ella el `memcmp` se podría borrar y las demás pruebas seguirían pasando.
+
+El orden importa. El paso 3 hashea `p->fill` y no `expected`, que serían
+equivalentes **mientras el paso 2 siga delante**; quitar el paso 2 y hashear
+`expected` a la vez deja pasar cualquier `fill` corrupto. La prueba
+`every_fill_byte_is_detected` cubre esa combinación.
+
+Devuelve `bool` y no el motivo porque D12 define `payload_ok` como un bit. Los
+tres chequeos son separables si alguna vez se quiere el motivo en `detail`.
+
+### Vector congelado y por qué
+
+El valor del checksum está fijo en la prueba (`{1, 1} -> 0xdf8b4fb5`, y cinco
+más), calculado con una implementación independiente de FNV-1a escrita desde
+esta bitácora y no con el código C que verifica. Sin el vector, un cambio de
+algoritmo, de orden de campos o de fórmula del relleno no rompería ninguna
+prueba: el ida y vuelta `build`/`verify` sigue cuadrando con cualquier hash
+consistente consigo mismo. El síntoma aparecería recién en el experimento,
+cuando los CSV de productor y consumidor dejaran de coincidir.
+
+El vector asume el orden de bytes del host, porque D1 decide no normalizar
+endianness (la ejecución es de un solo host). La prueba verifica
+explícitamente que el host es little-endian, así en una máquina big-endian
+falla esa condición con su nombre en vez de un hexadecimal sin contexto.
+
+### Lo que midieron las mutaciones
+
+Seis mutaciones de `src/payload.c`, cada una un error plausible:
+
+| Mutación | Resultado |
+|---|---|
+| Serializar `producer_id` antes de `sequence` | rompe 3 pruebas |
+| FNV-1 en vez de FNV-1a (multiplicar y luego XOR) | rompe 4 pruebas |
+| Sin el chequeo cruzado de identidad | rompe `identity_mismatch_is_detected` |
+| Sin el `memcmp` del `fill` | rompe `fill_from_another_identity_is_detected` |
+| Suma del `fill` en 32 bits | **sobrevive: es equivalente** |
+| Checksum sobre `expected` en vez de `p->fill` | **sobrevive: es equivalente dado el paso 2** |
+
+Las dos sobrevivientes no son huecos de prueba sino equivalencias
+semánticas, y la primera corrigió un comentario del código que afirmaba lo
+contrario: el `% 256` solo mira el byte bajo de la suma, y el desborde de un
+`unsigned` envuelve sin alterarlo, así que hacer la aritmética en 32 bits da
+exactamente los mismos bytes. El `uint64_t` queda por claridad de lectura, no
+por corrección, y el comentario ahora lo dice así.
