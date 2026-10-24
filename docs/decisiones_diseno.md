@@ -1700,3 +1700,97 @@ de 120 ms dure al menos 100. Con el acoplamiento roto a propósito, falla.
 Las pruebas de pausa llevan además una alarma, porque el desalineamiento
 inverso (condvar monotónica, plazo en tiempo real) no acortaría la espera
 sino que la volvería de décadas, y sin alarma `make test` colgaría.
+
+---
+
+## D21 — Corte a CLOSING: `closing_begin` y el snapshot del corte
+
+- **Fecha:** 2026-10-22
+- **Issue:** [#16](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/16)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+> **Numeración:** D20 queda reservada para la pausa interrumpible
+> ([#13](https://github.com/ebarrantes07/SOA-P2-GrupoIE/pull/42)), abierta
+> al escribir esto.
+
+### Contexto
+
+D10 ya fijó el pseudocódigo de `closing_begin`: precondición, finalizador
+único sin bandera extra, transición como punto de corte, cierre de la
+puerta y `broadcast`. Esta entrada registra lo que la implementación tuvo
+que agregar.
+
+### El snapshot del corte: por qué cambia la firma declarada en D8
+
+`participants.h` declaraba `closing_begin(struct instance *inst)`. No
+alcanza, y el motivo es D12: la fila `CLOSING` del CSV lleva los
+aceptados, los extraídos y los pendientes **en el punto de corte**.
+
+Esos tres números solo existen dentro de la región crítica. Al soltar el
+mutex, `accepted` queda congelado (ya no entran inserciones) pero los
+consumidores **siguen drenando**, como manda D10: `extracted` crece y
+`pending` baja. Hay dos formas de equivocarse al leerlos afuera, y fallan
+distinto:
+
+- **Sin el mutex** (lo natural, porque son miembros comunes del struct y
+  el mutex acaba de soltarse): las lecturas no son atómicas entre sí. Si
+  un consumidor extrae entre dos de ellas, los números quedan
+  **mutuamente inconsistentes** y el chequeo de cierre del verificador
+  (D16) reporta `cierre inconsistente` sobre una corrida correcta.
+  Comprobado con dos CSV idénticos salvo esa fila: `10, 6, 4` pasa
+  limpio; `10, 7, 4` da violación. Y es **intermitente**, porque depende
+  de caer en una ventana de nanosegundos.
+- **Volviendo a tomar el mutex:** quedan consistentes entre sí, porque
+  `aceptados == extraídos + pendientes` es un invariante del buffer en
+  todo instante, así que el verificador no se queja. Pero describen un
+  momento posterior al corte: el CSV diría "4 pendientes al cortar"
+  cuando había 7. Dato silenciosamente falso, que termina en el informe
+  como cantidad medida.
+
+De ahí el parámetro de salida:
+
+```c
+struct close_snapshot {
+    uint64_t accepted, extracted, closing_ns;
+    uint32_t pending;
+};
+enum close_result closing_begin(struct instance *inst,
+                                struct close_snapshot *snap);
+```
+
+Mismo patrón que `struct op_snapshot` en D3, y por la misma razón:
+capturar bajo protección y escribir después. **No** se resuelve retornando
+con el mutex tomado (como sí hace `closing_wait_all_left`), porque
+entonces el llamador escribiría el CSV reteniendo el mutex — justo lo que
+el enunciado prohíbe, y bloquearía a todos los participantes durante una
+escritura a disco.
+
+`snap` admite `NULL`: el #17 no necesita los números, solo el ejecutable
+al escribir la fila. Si no es `NULL` se pone en cero al entrar, así queda
+definido en cualquier camino; un rechazo lo deja en cero, porque D12 no
+pide números en la fila `CLOSE_REJECTED`.
+
+### Las cuatro combinaciones de la precondición
+
+La expresión de D10 es corta y fácil de leer mal, así que quedan
+enumeradas:
+
+| Consumidores activos | Productores activos | Pendientes | Resultado |
+|---|---|---|---|
+| ≥ 1 | cualquiera | cualquiera | `CLOSE_OK` |
+| 0 | 0 | 0 | `CLOSE_OK` (no queda nada por drenar) |
+| 0 | > 0 | cualquiera | `CLOSE_NO_CONSUMER` |
+| 0 | 0 | > 0 | `CLOSE_NO_CONSUMER` (nadie sacaría esos mensajes) |
+
+Un rechazo no reserva nada: la instancia sigue en OPEN, con la puerta
+abierta y `closing_start_ns` en 0, así que se puede levantar un consumidor
+y reintentar.
+
+### Este issue no trae el ejecutable `finisher`
+
+Los cinco criterios del #16 son sobre la lógica, y el binario necesita
+además `closing_wait_all_left` y `closing_release` (#17) para completar el
+cierre. Un `finisher` que pasara a CLOSING y terminara ahí dejaría la
+instancia en CLOSING para siempre, con las primitivas vivas y el objeto de
+`/dev/shm` presente: peor que no tener ejecutable. El binario llega con el
+#17.
