@@ -72,6 +72,19 @@ Crea e inicializa la instancia y termina con código 0 cuando ya acepta particip
 nombre es `/` seguido de 1 a 30 caracteres `[A-Za-z0-9_-]` y la capacidad va de 1 a 1024.
 Si ya existe una instancia con ese nombre, la rechaza sin modificarla (código 1).
 
+### producer
+
+```bash
+./producer --name /soa_p2_g1 --id 1 --mean-ms 5 --seed 7 --log results/p1.csv
+./producer --name /soa_p2_g1 --id 1 --mean-ms 5 --seed 7 --messages 1000 --log results/p1.csv
+```
+
+Se registra y repite: pausa exponencial de media `--mean-ms`, arma un mensaje con payload
+verificable e inserta (esperando bloqueado si el buffer está lleno). Con `--messages` se retira al
+aceptar esa cantidad; sin la opción sigue hasta el cierre. Al notar que la instancia se está
+cerrando se retira sin insertar nada más, incluso si no alcanzó su cuota, y termina con código 0.
+Cada evento queda en su CSV (formato en `docs/decisiones_diseno.md`, D12).
+
 ### Opciones
 
 | Opción | creator | producer | consumer | finisher | Valor |
