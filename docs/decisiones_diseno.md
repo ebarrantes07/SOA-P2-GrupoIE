@@ -1996,3 +1996,18 @@ consumir y ningún consumidor registrado es rechazado con
 `CLOSE_NO_CONSUMER`, y la instancia sigue OPEN. El productor que entra
 entonces se bloquea esperando espacio, como manda D3. La precondición de
 D10 hace justo lo que debe.
+
+### Higiene de las pruebas: el segmento sí, los CSV no
+
+`CHECK` devuelve `false` en el acto, así que una prueba que falla a mitad se
+saltea su limpieza. Medido forzando una falla: queda un `t14_*` colgado en
+`/dev/shm` hasta el próximo reinicio, y acumularlos mientras se depura es
+fácil. `tests/test_producer.c` anota cada nombre que entrega y los borra con
+`atexit`, que corre igual cuando una prueba falla.
+
+Los CSV de `build/` se dejan a propósito en ese caso: son la evidencia de lo
+que pasó, y `make clean` los borra. El segmento de memoria compartida no
+sirve para depurar y sí molesta — de ahí la asimetría.
+
+El mismo patrón está en `tests/test_consumer.c` (#15): una prueba suya que
+falla deja su propio segmento. Se le pasó la nota en la revisión del PR.
