@@ -1971,3 +1971,119 @@ Verificado por mutación: dejar `payload_ok` siempre en 1, salir al ver el
 buffer vacío, salir al ver CLOSING sin drenar, saltear el procesamiento
 fuera de OPEN y no pasarle las métricas a `participant_leave` hacen fallar
 las pruebas correspondientes.
+
+---
+
+## D24 — Ejecutable `producer`
+
+- **Fecha:** 2026-10-24
+- **Issue:** [#14](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/14)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+El productor es el otro extremo del payload de D22 (#44): arma `fill` y
+`checksum` con `payload_build` antes de insertar, y el consumidor los
+recalcula con `payload_verify`. Es también el primer proceso que usa la
+pausa interrumpible de D20 para lo que fue diseñada.
+
+### Flujo
+
+1. **Valida argumentos** (D15) y **abre su CSV antes de conectarse**, para
+   que un rechazo también quede registrado (mismo orden que D23).
+2. **Se conecta y se registra** (D9, D8). Un fallo escribe `JOIN_REJECTED`
+   con el motivo de D12 y sale con 1, sin dejar recursos.
+3. **Repite:** pausa interrumpible (D20) → `payload_build` → `sync_put`
+   bloqueante (D3) → fila `PUT`. La fila se escribe fuera del mutex, con
+   lo capturado en el `op_snapshot`.
+4. **Se retira** con `participant_leave`, fila `LEAVE` (`quota_done` o
+   `closing`) e `instance_detach`.
+
+### Decisiones
+
+**La pausa va antes de cada intento, y es la que nota el cierre.** Con
+`--mean-ms 0` no se llama al muestreo ni se duerme (lo pide el enunciado y
+lo repite D20), así que ahí el corte se nota recién en `sync_put`. Eso
+produce dos comportamientos distintos y los dos son correctos:
+
+| Escenario | Filas `PUT_REJECTED` del productor | Por qué |
+|---|---|---|
+| `--mean-ms 5`, corte a los 400 ms | **0** (medido: 72 aceptados) | el corte lo despierta en la pausa; se retira sin intentar |
+| `--mean-ms 0`, corte a los 400 ms | **1** (medido: 164 429 aceptados) | nunca duerme, así que el rechazo del `put` es su primera noticia |
+
+Consecuencia para D11: `metrics.rejected_puts` **no mide trabajo perdido**.
+Vale 0 o 1 por productor — es el intento con el que cada uno descubre el
+corte, no una cuenta de mensajes que se cayeron.
+
+**Al despertar interrumpido no intenta insertar.** El criterio del issue es
+*"al notar CLOSING, se retira sin insertar otro mensaje más"*. Podría
+llamar a `sync_put` y dejar que lo rechace, pero eso agregaría una fila
+`PUT_REJECTED` que no aporta nada: ya sabe la respuesta.
+
+**Un intento rechazado consume un número de secuencia.** La identidad se
+asigna antes del `put` (`msg.sequence = ++sequence`), así que la secuencia
+del intento rechazado queda escrita en la fila `PUT_REJECTED` —como pide
+D12— y nunca aparece como `PUT`. El verificador (#16) cruza `PUT` contra
+`GET`, no `PUT_REJECTED`, así que no lo ve como un mensaje perdido.
+Verificado: las corridas con un `PUT_REJECTED` pasan `verify` sin
+violaciones.
+
+**La cuota cuenta aceptados, no intentos**, y no alcanzarla no es un error.
+Medido: con `--messages 100000000` y un corte a los 300 ms, el productor
+acepta 99 345, escribe `LEAVE closing` y **sale con 0**. El código de
+salida tiene que distinguir "falló" de "el cierre ordenado llegó primero",
+porque el script del experimento (#24) los lee: un productor interrumpido
+por el finisher hizo exactamente lo que debía.
+
+**El mensaje se pone en cero completo** (`memset`) y no campo por campo: el
+`reserved` de `struct message` viaja a la memoria compartida y D13 lo quiere
+siempre en 0.
+
+**`rng_init` se revisa aunque hoy no pueda fallar.** La CLI exige `--seed`
+en 1..UINT32_MAX, pero si alguna vez deja de exigirlo, `rng_init` devuelve
+−1 **sin tocar la estructura** y seguir usaría memoria sin inicializar. Es
+error de programación: aborta (D18).
+
+**Un error de escritura del CSV no corta la corrida.** Se recuerda el
+primero y se reporta al final con código 1. Abandonar a mitad de camino
+dejaría la referencia de conexión tomada y el finisher esperaría para
+siempre.
+
+### Verificación de punta a punta (manual, hasta que exista el finisher)
+
+Sin binario `finisher` (#17) todavía, las corridas se hicieron con un
+cortador mínimo que llama a `closing_begin`. Resultados:
+
+| Escenario | Resultado |
+|---|---|
+| Cuota de 50, un consumidor | 50 `PUT` / 50 `GET` / 50 `PROCESSED`, `verify` sin violaciones |
+| Sin cuota, `--mean-ms 0`, corte a 400 ms | 164 429 aceptados, 1 rechazado, 493 295 filas, `verify` sin violaciones |
+| Sin cuota, `--mean-ms 5`, corte a 400 ms | 72 aceptados, 0 rechazados, `verify` sin violaciones |
+| Cuota inalcanzable + corte | 99 345 aceptados, `LEAVE closing`, código 0 |
+| Instancia inexistente / id duplicado / instancia cerrándose | código 1 y `JOIN_REJECTED` con `not_found` / `duplicate_id` / `closing` |
+
+**El cruce que importa para D22:** en las 164 429 extracciones de la corrida
+larga, `payload_ok` dio 1 en todas. Es la primera validación entre procesos
+del módulo del #44 — productor que arma y consumidor que recalcula, con una
+sola implementación de FNV-1a de por medio.
+
+Un hallazgo del camino: un cortador sobre una instancia con un mensaje sin
+consumir y ningún consumidor registrado es rechazado con
+`CLOSE_NO_CONSUMER`, y la instancia sigue OPEN. El productor que entra
+entonces se bloquea esperando espacio, como manda D3. La precondición de
+D10 hace justo lo que debe.
+
+### Higiene de las pruebas: el segmento sí, los CSV no
+
+`CHECK` devuelve `false` en el acto, así que una prueba que falla a mitad se
+saltea su limpieza. Medido forzando una falla: queda un `t14_*` colgado en
+`/dev/shm` hasta el próximo reinicio, y acumularlos mientras se depura es
+fácil. `tests/test_producer.c` anota cada nombre que entrega y los borra con
+`atexit`, que corre igual cuando una prueba falla.
+
+Los CSV de `build/` se dejan a propósito en ese caso: son la evidencia de lo
+que pasó, y `make clean` los borra. El segmento de memoria compartida no
+sirve para depurar y sí molesta — de ahí la asimetría.
+
+El mismo patrón está en `tests/test_consumer.c` (#15): una prueba suya que
+falla deja su propio segmento. Se le pasó la nota en la revisión del PR.
