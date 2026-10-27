@@ -91,7 +91,13 @@ int main(int argc, char **argv) {
     }
 
     struct rng rng;
-    rng_init(&rng, opt.seed);       /* la CLI ya garantizó seed != 0 */
+    /* La CLI ya garantiza seed != 0, pero si eso cambiara rng_init devuelve
+     * -1 sin inicializar la estructura: error de quien programa, se aborta
+     * en vez de seguir con un generador basura (D18). */
+    if (rng_init(&rng, opt.seed) != 0) {
+        fprintf(stderr, "consumer: rng_init rechazo la semilla %" PRIu32 "\n", opt.seed);
+        abort();
+    }
 
     struct csv_record rec;
     int write_err = 0;
@@ -159,11 +165,10 @@ int main(int argc, char **argv) {
         if (opt.mean_ms > 0.0)       /* --mean-ms 0 no llama al muestreo (#5) */
             simulate_processing(rng_exponential_ms(&rng, opt.mean_ms));
 
-        uint64_t dseq = rec.dequeue_seq;
         csv_record_event(&rec, CSV_PROCESSED, now_monotonic_ns(), NULL);
         rec.producer_id = msg.producer_id;
         rec.sequence = msg.sequence;
-        rec.dequeue_seq = dseq;
+        rec.dequeue_seq = snap.seq;
         log_row(&lg, &rec, &write_err);
     }
 

@@ -1937,6 +1937,14 @@ fuera de la región crítica. No trae implementación propia del checksum.
   conexión tomada, y el finisher esperaría para siempre.
 - **La espera final en vacío se acumula** en `wait_ns`, como declara D11
   (espera combinada).
+- **Código de salida con payloads alterados: 0.** El código de salida dice
+  si el consumer cumplió el protocolo (se registró, drenó y se retiró), no
+  si el contenido llegó sano. Un payload alterado queda en el CSV con
+  `payload_ok = 0` y en el resumen de stdout, y la compuerta es el
+  verificador (D16), que sí sale con 1. El script del experimento (#24)
+  corre `verify` sobre los CSV de cada corrida y usa su código, no el de
+  los ejecutables. Mezclar las dos cosas haría que un consumer correcto
+  "fallara" por un error que no es suyo. (Pregunta de la revisión de #46.)
 - **No se usan señales de terminación como mecanismo normal de salida**
   (el enunciado lo prohíbe): el consumer termina solo por `GET_DRAINED` o
   por un rechazo al entrar.
@@ -1949,6 +1957,17 @@ por `./verify` (D16). El payload de cada mensaje se arma con
 `payload_build` (D22), igual que lo hará el producer. Cubre: corrida verificada, espera bloqueada con el
 buffer vacío, drenaje completo después del corte (con pendientes en el
 snapshot), cuatro consumidores, id duplicado, instancia inexistente,
-conexión después del cierre y payload alterado. Verificado por mutación:
-dejar `payload_ok` siempre en 1, salir al ver el buffer vacío y salir al
-ver CLOSING sin drenar hacen fallar las pruebas correspondientes.
+conexión después del cierre y payload alterado.
+
+Dos cosas no se verifican contando filas (revisión de #46):
+- **El procesamiento después del corte se mide en tiempo:** para cada
+  mensaje extraído después de `closing_ns`, la diferencia entre su `GET` y
+  su `PROCESSED`. Si el cierre truncara el procesamiento, las filas
+  `PROCESSED` se escribirían igual pero esa suma sería ~0.
+- **Las métricas de la casilla** (`ops`, `wait_ns`, `wait_count`,
+  `lock_ns`, que lee el resumen de #18) se revisan después de cada corrida.
+
+Verificado por mutación: dejar `payload_ok` siempre en 1, salir al ver el
+buffer vacío, salir al ver CLOSING sin drenar, saltear el procesamiento
+fuera de OPEN y no pasarle las métricas a `participant_leave` hacen fallar
+las pruebas correspondientes.

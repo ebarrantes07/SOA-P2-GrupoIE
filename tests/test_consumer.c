@@ -37,11 +37,25 @@ static char *path_for(const char *tag, const char *who) {
     return b;
 }
 
+/* Cada nombre entregado se anota y se borra con atexit: CHECK sale de la
+ * prueba en el acto y se saltea su limpieza, y el segmento quedaría en
+ * /dev/shm hasta el próximo reinicio (señalado en la revisión de #47). */
+#define MAX_NAMES 32
+static char all_names[MAX_NAMES][INSTANCE_NAME_MAX + 1];
+static int n_names;
+
+static void unlink_all_names(void) {
+    for (int i = 0; i < n_names; i++)
+        memory_unlink(all_names[i]);
+}
+
 static const char *name_for(const char *tag) {
-    static char buf[INSTANCE_NAME_MAX + 1];
-    snprintf(buf, sizeof(buf), "/t15_%d_%s", (int)getpid(), tag);
-    memory_unlink(buf);
-    return buf;
+    if (n_names == MAX_NAMES)
+        abort();                         /* agrandar MAX_NAMES */
+    char *b = all_names[n_names++];
+    snprintf(b, sizeof(all_names[0]), "/t15_%d_%s", (int)getpid(), tag);
+    memory_unlink(b);
+    return b;
 }
 
 /* Lanza ./consumer con los argumentos dados; stdout a /dev/null. */
@@ -162,6 +176,17 @@ static bool count_rows(const char *path, struct counts *c) {
     return true;
 }
 
+/* Lee todas las filas de un CSV (hay que liberar *rows). */
+static bool load_rows(const char *path, struct log_row **rows, size_t *n) {
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return false;
+    size_t line;
+    enum log_read_result r = log_rows_read(f, rows, n, &line);
+    fclose(f);
+    return r == LOG_READ_OK;
+}
+
 /* Corre ./verify sobre los CSV dados y devuelve su código de salida. */
 static int run_verify(const char *a, const char *b, const char *c, const char *d) {
     char cmd[512];
@@ -219,6 +244,14 @@ static bool test_end_to_end_verified(void) {
     CHECK(n.payload_bad == 0 && n.drained == 1 && n.leave == 1);
     CHECK(run_verify(e.plog, clog, e.flog, NULL) == 0);
     CHECK(e.inst->active_consumers == 0);       /* se retiró */
+
+    /* Las métricas que deja en su casilla al retirarse son la entrada del
+     * resumen del finisher (D11, #18): tienen que llegar llenas. */
+    struct participant_slot *s = &e.inst->consumers.slots[0];
+    CHECK(e.inst->consumers.used == 1 && s->state == SLOT_LEFT && s->id == 1);
+    CHECK(s->ops == 500);
+    CHECK(s->lock_ns > 0);
+    CHECK(s->left_ns > s->joined_ns);
     unlink(clog);
     env_close(&e);
     return true;
@@ -244,6 +277,13 @@ static bool test_blocks_while_empty(void) {
     struct counts n;
     CHECK(count_rows(clog, &n));
     CHECK(n.get == 1 && n.drained == 1);
+
+    /* Esperó bloqueado al menos los 300 ms con el buffer vacío, y eso
+     * tiene que verse en su casilla (wait_ns, wait_count; D11). */
+    struct participant_slot *s = &e.inst->consumers.slots[0];
+    CHECK(s->ops == 1);
+    CHECK(s->wait_count >= 1);
+    CHECK(s->wait_ns >= 250000000ull);
     unlink(clog);
     env_close(&e);
     return true;
@@ -268,6 +308,31 @@ static bool test_drains_everything_after_closing(void) {
     CHECK(count_rows(clog, &n));
     CHECK(n.get == 20 && n.processed == 20);   /* drenó y terminó de procesar todo */
     CHECK(run_verify(e.plog, clog, e.flog, NULL) == 0);
+
+    /* Contar filas PROCESSED no alcanza: se escribirían igual si el cierre
+     * truncara el procesamiento. Se mide el tiempo entre el GET y el
+     * PROCESSED de cada mensaje extraído DESPUÉS del corte (D23: el
+     * procesamiento no se interrumpe). Con media de 20 ms, la suma sobre
+     * una decena de mensajes no baja de 100 ms salvo un caso
+     * estadísticamente despreciable; si se truncara, sería ~0. */
+    struct log_row *rows;
+    size_t nrows;
+    CHECK(load_rows(clog, &rows, &nrows));
+    uint64_t processing_after_cut = 0;
+    size_t gets_after_cut = 0;
+    for (size_t i = 0; i < nrows; i++) {
+        if (rows[i].event != LOG_EVENT_GET || rows[i].t_ns < snap.closing_ns)
+            continue;
+        gets_after_cut++;
+        for (size_t j = i + 1; j < nrows; j++)
+            if (rows[j].event == LOG_EVENT_PROCESSED && rows[j].dequeue_seq == rows[i].dequeue_seq) {
+                processing_after_cut += rows[j].t_ns - rows[i].t_ns;
+                break;
+            }
+    }
+    free(rows);
+    CHECK(gets_after_cut >= 10);
+    CHECK(processing_after_cut > 100000000ull);
     unlink(clog);
     env_close(&e);
     return true;
@@ -394,6 +459,7 @@ int main(void) {
         fprintf(stderr, "test_consumer: faltan ./consumer o ./verify (correr desde la raiz con make test)\n");
         return 1;
     }
+    atexit(unlink_all_names);
     struct test_case tests[] = {
         {"end_to_end_verified", test_end_to_end_verified},
         {"blocks_while_empty", test_blocks_while_empty},
