@@ -96,6 +96,19 @@ el contenido de cada uno y simula su procesamiento con pausas exponenciales de m
 Termina solo cuando la instancia está cerrándose y ya no quedan mensajes, después de procesar todo
 lo que retiró. Cada evento queda en su CSV (formato en `docs/decisiones_diseno.md`, D12).
 
+### finisher
+
+```bash
+./finisher --name /soa_p2_g1 --summary results/resumen.csv
+./finisher --name /soa_p2_g1 --summary results/resumen.csv --log results/fin.csv
+```
+
+Conduce el cierre ordenado: corta la instancia a CLOSING (desde ahí no se aceptan inserciones ni
+participantes nuevos), espera a que todos los participantes se retiren, libera los recursos y el
+nombre (que queda libre para crear otra instancia) y escribe el resumen. Si no hay consumidores y
+todavía queda trabajo, o si ya hay otro cierre en curso, rechaza el cierre sin tocar la instancia
+y termina con código 1. Los eventos se muestran en la consola y, con `--log`, también en su CSV.
+
 ### Opciones
 
 | Opción | creator | producer | consumer | finisher | Valor |

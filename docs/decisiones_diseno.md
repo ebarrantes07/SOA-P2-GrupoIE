@@ -2174,3 +2174,85 @@ estén recompilados. Correr `./build/test_blocking` directamente después de
 cambiar `src/` puede medir binarios viejos; `make test` los reconstruye
 primero. (Me pasó durante este issue: una mutación "sobrevivió" porque el
 ejecutable no se había relinkeado.)
+
+---
+
+## D26 — Finisher II: espera de retiradas, liberación y ejecutable `finisher`
+
+- **Fecha:** 2026-10-26
+- **Issue:** [#17](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/17)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+- **Numeración:** D25 es de las pruebas de bloqueo (#48), abierto antes que este PR.
+
+### Contexto
+
+D9 y D10 fijan el protocolo y D21 implementa el corte (`closing_begin`).
+Faltaba la segunda mitad: esperar a que nadie más pueda tocar las
+primitivas, liberarlas y el ejecutable que conduce todo el cierre.
+
+### Decisiones
+
+- **`closing_wait_all_left` espera sobre `refs`, no sobre `active_*`.**
+  El predicado es el de D9: queda alguien conectado además del finisher.
+  Cubre a quien se conectó y todavía no se registró, que va a recibir
+  `REG_NOT_OPEN`, se va a desconectar y eso lo libera. Verificado por
+  mutación: esperar solo a los registrados hace que ese proceso intente
+  registrarse sobre un mutex ya destruido y muera.
+- **`sync_wait_all_left` en `sync.c`**, pareja de `sync_signal_all_left`
+  (D19): la espera sobre la condvar va en la única capa que las toca (D3).
+- **Con `refs == 1` los contadores de activos deberían estar en 0.** Si
+  no, alguien se desconectó sin retirarse; el finisher lo avisa por
+  `stderr` y libera igual, porque dejar la instancia a medio cerrar sería
+  peor.
+- **`closing_release`**: `state = CLOSED`, suelta el mutex, destruye las
+  primitivas y hace `shm_unlink`. No desmapea (el resumen lee el segmento
+  después). Si algo falla sigue liberando y devuelve el primer error.
+- **La duración del cierre** va de `closing_ns` (el snapshot del corte)
+  hasta que `closing_release` retornó, como define D11.
+
+### El ejecutable
+
+Orden de D10:
+
+```text
+instance_attach → CLOSE_REQUEST → closing_begin(&snap) → CLOSING
+→ closing_wait_all_left → ALL_LEFT → closing_release → CLOSED
+→ resumen → munmap
+```
+
+- **Rechazos:** si la precondición falla (`no_consumer`) o ya hay un
+  cierre en curso (`already_closing`, detectado en `closing_begin` o
+  antes, por la puerta cerrada al conectarse), escribe `CLOSE_REJECTED`
+  y sale con 1 sin tocar la instancia. Con `no_consumer` queda OPEN y se
+  puede reintentar tras levantar un consumidor.
+- **Consola y CSV:** cada evento se imprime siempre en la consola; con
+  `--log` también va a su CSV (D12). Un error de escritura no corta el
+  cierre y se reporta al final con código 1.
+- **Resumen provisional.** `--summary` es obligatoria, pero
+  `summary_write_csv` es del Issue #18. Mientras tanto, el finisher
+  escribe en el formato largo de D11 las filas de instancia que ya tiene:
+  `accepted`, `extracted`, `pending`, `rejected_puts`, `invariant_ok`,
+  `close_duration`, `producers` y `consumers`. #18 reemplaza esa función
+  por `summary_write_csv` y agrega esperas, latencia, p95, throughput y
+  las filas por participante.
+
+### Pruebas
+
+`test_finisher` lanza `./finisher` como proceso real: cierre sin
+trabajadores, espera de un participante registrado y de una conexión en
+curso (en los dos casos `ALL_LEFT` es posterior a la desconexión del
+participante), rechazo sin consumidor (la instancia sigue OPEN con la
+puerta abierta, y tras retirarse el productor el cierre procede), segundo
+finisher rechazado y ciclo completo con `./producer` cerrado, recreado con
+el mismo nombre y vuelto a cerrar, con los CSV verificados por `./verify`
+en los dos ciclos.
+
+Verificado por mutación: no esperar las retiradas, esperar solo a los
+registrados y no hacer `shm_unlink` hacen fallar las pruebas
+correspondientes.
+
+Además, con los cuatro ejecutables reales y el consumer del #46: 4
+productores y 4 consumidores con cierre al terminar las cuotas, y cierre
+en plena actividad con capacidades 1, 8 y 64 (el corte encontró el buffer
+lleno en los tres casos). En todas las corridas `verify` no reportó
+violaciones y `/dev/shm` quedó vacío.
