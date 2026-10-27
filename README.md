@@ -85,6 +85,17 @@ aceptar esa cantidad; sin la opción sigue hasta el cierre. Al notar que la inst
 cerrando se retira sin insertar nada más, incluso si no alcanzó su cuota, y termina con código 0.
 Cada evento queda en su CSV (formato en `docs/decisiones_diseno.md`, D12).
 
+### consumer
+
+```bash
+./consumer --name /soa_p2_g1 --id 1 --mean-ms 10 --seed 11 --log results/c1.csv
+```
+
+Se registra, extrae mensajes en orden FIFO (esperando bloqueado si el buffer está vacío), verifica
+el contenido de cada uno y simula su procesamiento con pausas exponenciales de media `--mean-ms`.
+Termina solo cuando la instancia está cerrándose y ya no quedan mensajes, después de procesar todo
+lo que retiró. Cada evento queda en su CSV (formato en `docs/decisiones_diseno.md`, D12).
+
 ### Opciones
 
 | Opción | creator | producer | consumer | finisher | Valor |
