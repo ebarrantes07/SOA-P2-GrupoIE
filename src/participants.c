@@ -224,3 +224,39 @@ enum close_result closing_begin(struct instance *inst,
     sync_unlock(inst);
     return CLOSE_OK;
 }
+
+/* ---- Cierre: espera de retiradas y liberación (D9, D10, #17) ---------- */
+
+void closing_wait_all_left(struct instance *inst) {
+    sync_lock(inst);
+    /* Predicado de D9: queda alguien conectado además del finisher. El
+     * conjunto que se espera ya no puede crecer (la puerta se cerró en el
+     * corte) y cada salida avisa bajo el mutex, así que no hay despertar
+     * perdido. Incluye a quien se conectó y todavía no se registró: va a
+     * recibir REG_NOT_OPEN, se va a desconectar y eso lo libera. */
+    while ((atomic_load(&inst->refs) & REFS_COUNT_MASK) > 1)
+        sync_wait_all_left(inst);
+
+    /* Con refs == 1 todo participante ya pasó por participant_leave antes
+     * de desconectarse. Si un contador quedó en otro valor, alguien se
+     * desconectó sin retirarse: es un error de quien programa, pero el
+     * finisher igual tiene que liberar, así que solo se avisa. */
+    if (inst->active_producers != 0 || inst->active_consumers != 0)
+        fprintf(stderr, "participants: cierre con activos sin retirar (productores=%u, consumidores=%u)\n",
+                inst->active_producers, inst->active_consumers);
+    /* Retorna con el mutex tomado (participants.h). */
+}
+
+int closing_release(struct instance *inst, const char *name) {
+    /* Precondición: closing_wait_all_left retornó con el mutex tomado, así
+     * que nadie más puede tocar las primitivas: la puerta está cerrada y
+     * el único conectado es este proceso (D9). */
+    inst->state = STATE_CLOSED;
+    sync_unlock(inst);
+
+    int first = sync_destroy_primitives(inst);
+    int rc = memory_unlink(name);      /* el nombre queda libre para recrear */
+    if (first == 0)
+        first = rc;
+    return first;
+}

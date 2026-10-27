@@ -52,6 +52,12 @@ void sync_broadcast_all(struct instance *inst);
  * (D3). Misma politica de errores que el resto (D18). */
 void sync_signal_all_left(struct instance *inst);
 
+/* Duerme una vez en all_left (un pthread_cond_wait). La usa
+ * closing_wait_all_left (D9, #17) dentro de su ciclo while sobre refs.
+ * Precondicion: mutex tomado; lo vuelve a tener al retornar. Misma
+ * politica de errores que el resto (D18). */
+void sync_wait_all_left(struct instance *inst);
+
 /* ---- Pausa interrumpible por el cierre (#13) --------------------------- */
 
 enum pause_result {

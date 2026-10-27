@@ -174,6 +174,10 @@ void sync_signal_all_left(struct instance *inst) {
     cond_signal_checked(&inst->all_left);
 }
 
+void sync_wait_all_left(struct instance *inst) {
+    cond_wait_checked(&inst->all_left, &inst->mutex);
+}
+
 /* ---- Medicion de esperas para op_snapshot (D11) ----------------------- */
 
 /* El reloj solo se lee si el llamador pidio snapshot: quien no quiere las
