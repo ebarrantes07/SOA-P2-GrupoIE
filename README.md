@@ -125,6 +125,23 @@ y termina con código 1. Los eventos se muestran en la consola y, con `--log`, t
 ✓ = obligatoria. Cualquier argumento inválido, faltante, repetido o desconocido termina con un
 mensaje en `stderr` y código 1. `--help` muestra el uso de cada ejecutable.
 
+## Experimento
+
+```bash
+make                                    # los cinco ejecutables primero
+python3 scripts/experimento.py          # las 45 corridas (~70 s)
+python3 scripts/experimento.py --quick  # 3 corridas, para probar el script
+```
+
+Corre las 45 combinaciones que pide el enunciado (capacidades 1/8/64 × medias
+productor/consumidor 2/8, 8/2, 5/5 × 5 repeticiones) con 4 productores y 4 consumidores de 200
+mensajes cada productor. Cada corrida deja sus CSV en `results/<combinación>_rep<N>/` y una fila
+en `results/manifiesto.csv` con sus parámetros, sus semillas, los códigos de salida y el
+resultado del verificador. Termina con código 0 solo si las 45 corridas quedaron válidas.
+
+Las semillas se derivan de `--base-seed`, así que repetir el experimento con la misma base
+reproduce las mismas secuencias de pausas. Detalles en `docs/decisiones_diseno.md` (D27).
+
 ## Versión entregada
 
 _Pendiente: URL, etiqueta `p2-entrega` y hash completo del commit._
