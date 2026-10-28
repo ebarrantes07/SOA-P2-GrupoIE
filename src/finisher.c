@@ -5,7 +5,7 @@
  * Orden de D10: conectarse, cortar a CLOSING (closing_begin, con el
  * snapshot del corte), esperar a que todos los participantes se retiren
  * (closing_wait_all_left), liberar primitivas y nombre (closing_release),
- * escribir el resumen y desmapear. Si la precondición falla o ya hay otro
+ * escribir el resumen (D11, #18) y desmapear. Si la precondición falla o ya hay otro
  * cierre en curso, no toca nada y sale con 1. Los eventos van a la consola
  * y, con --log, también a su CSV (D12).
  */
@@ -19,6 +19,7 @@
 #include "clock.h"
 #include "logger.h"
 #include "memory.h"
+#include "metrics.h"
 #include "participants.h"
 
 /* Bitácora del finisher: siempre una línea en la consola y, si se pidió
@@ -37,35 +38,6 @@ static void journal(struct journal *j, const struct csv_record *rec, const char 
         if (rc != 0 && j->first_err == 0)
             j->first_err = rc;
     }
-}
-
-/* Resumen PROVISIONAL: los totales del corte y la duración del cierre, en
- * el formato largo de D11. El resumen completo (esperas, latencia, p95,
- * throughput, filas por participante) es del Issue #18, que reemplaza esta
- * función por summary_write_csv. Se lee el segmento sin mutex: ya no queda
- * nadie conectado (closing_wait_all_left retornó). */
-static int write_provisional_summary(const char *path, const struct instance *inst,
-                                     uint64_t close_duration_ns) {
-    FILE *f = fopen(path, "w");
-    if (f == NULL)
-        return -errno;
-    uint64_t accepted = inst->enqueue_seq, extracted = inst->dequeue_seq;
-    int ok = accepted == extracted + inst->count && inst->count == 0;
-    fprintf(f, "metric,role,id,value,unit,note\n");
-    fprintf(f, "accepted,instance,0,%" PRIu64 ",msgs,\n", accepted);
-    fprintf(f, "extracted,instance,0,%" PRIu64 ",msgs,\n", extracted);
-    fprintf(f, "pending,instance,0,%" PRIu32 ",msgs,\n", inst->count);
-    fprintf(f, "rejected_puts,instance,0,%" PRIu64 ",count,intentos rechazados por el corte; no son aceptados\n",
-            inst->metrics.rejected_puts);
-    fprintf(f, "invariant_ok,instance,0,%d,bool,accepted = extracted + pending y pending = 0\n", ok);
-    fprintf(f, "close_duration,instance,0,%" PRIu64 ",ns,de CLOSING a liberacion completa\n",
-            close_duration_ns);
-    fprintf(f, "producers,instance,0,%" PRIu32 ",count,registros de por vida\n", inst->producers.used);
-    fprintf(f, "consumers,instance,0,%" PRIu32 ",count,registros de por vida\n", inst->consumers.used);
-    int rc = ferror(f) ? -EIO : 0;
-    if (fclose(f) != 0 && rc == 0)
-        rc = -errno;
-    return rc;
 }
 
 int main(int argc, char **argv) {
@@ -151,7 +123,7 @@ int main(int argc, char **argv) {
     snprintf(text, sizeof(text), "CLOSED: recursos liberados en %.3f ms", (double)close_ns / 1e6);
     journal(&j, &rec, text);
 
-    int sum = write_provisional_summary(opt.summary_path, inst, close_ns);
+    int sum = summary_write_csv(opt.summary_path, inst, close_ns);
     memory_unmap(inst, len);
 
     int close_err = j.has_log ? csv_logger_close(&j.lg) : 0;
