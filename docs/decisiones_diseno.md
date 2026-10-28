@@ -2087,3 +2087,90 @@ sirve para depurar y sí molesta — de ahí la asimetría.
 
 El mismo patrón está en `tests/test_consumer.c` (#15): una prueba suya que
 falla deja su propio segmento. Se le pasó la nota en la revisión del PR.
+
+---
+
+## D25 — Probar que la espera es bloqueante y no por sondeo (`tests/test_blocking.c`)
+
+- **Fecha:** 2026-10-26
+- **Issue:** [#21](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/21)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+El enunciado pide los casos "buffer lleno" y "buffer vacío", y agrega un
+requisito que no se parece a los otros: *"Ambos casos verifican que la
+espera es **bloqueante (sin CPU ocupada en sondeo)**, no solo que
+eventualmente avanza."*
+
+Esa distinción importa porque una espera por sondeo —`while (lleno) { suelto
+el mutex y lo vuelvo a tomar; }`— **también** avanza cuando aparece la
+contraparte. Pasaría cualquier prueba que mire solo el progreso, y sin
+embargo es exactamente lo que el enunciado prohíbe.
+
+### Decisión
+
+Cada caso mide **tres** cosas del proceso que espera, durante una ventana de
+600 ms:
+
+1. que siga vivo (`waitpid` con `WNOHANG`),
+2. que su contador compartido no se mueva (`enqueue_seq` o `dequeue_seq`,
+   leídos bajo el mutex),
+3. que **su CPU no crezca** y su estado sea de espera.
+
+Lo tercero se lee de `/proc/<pid>/stat`: `utime + stime` (campos 14 y 15) y
+el estado (campo 3). Se parsea desde el **último** `)` y no por número de
+campo desde el principio, porque el campo 2 es el nombre del ejecutable
+entre paréntesis y puede contener espacios.
+
+### Por qué `/proc` y no una API POSIX
+
+| Alternativa | Por qué no |
+|---|---|
+| `wait4(pid, …, &rusage)` | Da la CPU de **ese** hijo, que es justo lo que hace falta, pero **no está declarada bajo `_POSIX_C_SOURCE=200809L`** (comprobado: `-Werror=implicit-function-declaration`). Habría que relajar la macro de características de todo el proyecto (D5) por una prueba. |
+| `getrusage(RUSAGE_CHILDREN)` | Sí compila con las flags del proyecto, pero **agrega todos los hijos ya cosechados** y solo informa **después** de que terminan. No puede observar a un proceso *mientras* está bloqueado, que es el momento que interesa. |
+| Medir solo el progreso | Es lo que el enunciado descarta explícitamente: un sondeo también progresa. |
+
+`/proc` es lo único que da la CPU de otro proceso **durante** su espera.
+Depende de Linux, que es el entorno objetivo declarado en el README. Si
+`/proc/<pid>/stat` no se puede leer, la prueba **falla con un mensaje que
+nombra la limitación**, no se saltea en silencio: una prueba que pasa sola
+cuando no puede medir es peor que no tenerla.
+
+### Los números
+
+Con `CLK_TCK = 100` (tick de 10 ms) y una ventana de 600 ms, se toleran **2
+ticks** (20 ms, 3.3 % de la ventana) para absorber una falta de página o un
+despertar espurio. Lo medido:
+
+| Implementación | CPU del proceso que espera |
+|---|---|
+| Real (`pthread_cond_wait`) | **0 ticks**, estado `S` |
+| Mutada a sondeo (`unlock`/`lock` en ciclo) | **51–60 ticks**, estado `R` |
+
+Margen de 25x entre lo tolerado y lo que produce un sondeo. Las dos
+mutaciones —sondeo en `sync_put` y en `sync_get`— hacen fallar su caso con
+el diagnóstico exacto ("consumio 52 ticks de CPU en 600 ms de pared: parece
+sondeo"), que es la prueba de que el criterio está cubierto y no solo
+declarado.
+
+### Dos productores y dos consumidores, no uno
+
+El criterio habla en plural. Con un solo proceso no se demuestra que
+**todos** los bloqueados duerman, así que cada caso levanta dos y los mide
+en la **misma** ventana (una sola espera de 600 ms), para que agregar
+procesos no alargue la prueba.
+
+### Lo primero que corre con los dos ejecutables reales
+
+A diferencia de `test_producer.c` y `test_consumer.c`, donde el proceso de
+prueba hacía de contraparte, acá **los dos extremos son los binarios de
+verdad** y la prueba solo observa y corta. Al final pasa los CSV por
+`./verify`.
+
+**Advertencia para quien corra las pruebas a mano:** el guardia de entrada
+comprueba que `./producer` y `./consumer` existan y sean ejecutables, no que
+estén recompilados. Correr `./build/test_blocking` directamente después de
+cambiar `src/` puede medir binarios viejos; `make test` los reconstruye
+primero. (Me pasó durante este issue: una mutación "sobrevivió" porque el
+ejecutable no se había relinkeado.)
