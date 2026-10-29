@@ -71,7 +71,7 @@ static void sleep_ms(long ms) {
 /* Los nombres se borran con atexit: CHECK sale en el acto y se saltearia la
  * limpieza, dejando el segmento en /dev/shm (igual que en #14, #15 y #21). */
 static char all_names[8][INSTANCE_NAME_MAX + 1];
-static int n_names;
+static volatile sig_atomic_t n_names;
 
 static void unlink_all_names(void) {
     for (int i = 0; i < n_names; i++)
@@ -79,12 +79,49 @@ static void unlink_all_names(void) {
 }
 
 static const char *name_for(const char *tag) {
-    if (n_names == (int)(sizeof(all_names) / sizeof(all_names[0])))
+    if (n_names == (sig_atomic_t)(sizeof(all_names) / sizeof(all_names[0])))
         abort();
     char *b = all_names[n_names++];
     snprintf(b, sizeof(all_names[0]), "/t20_%d_%s", (int)getpid(), tag);
     memory_unlink(b);
     return b;
+}
+
+/* ---- Hijos vivos ------------------------------------------------------ */
+
+/* Cada proceso lanzado queda anotado aca hasta que wait_exit lo cosecha, y
+ * lo que quede se mata al salir. Importa en los caminos de falla: si
+ * run_join se va antes del corte a CLOSING (porque un productor fallo), los
+ * consumidores siguen esperando datos que ya nadie va a insertar, y sin
+ * esto quedarian bloqueados para siempre -- 32 de ellos en el caso de
+ * estres -- aunque la prueba ya haya terminado.
+ *
+ * kill() sobre un pid anotado no puede caer en un proceso ajeno: un hijo
+ * que el padre todavia no cosecho sigue siendo zombie o vivo, asi que el
+ * nucleo no puede reciclar su pid. */
+static pid_t live[2 * MAX_SIDE];
+static volatile sig_atomic_t n_live;
+
+static void remember_child(pid_t pid) {
+    if (n_live == (sig_atomic_t)(sizeof(live) / sizeof(live[0])))
+        abort();
+    live[n_live++] = pid;
+}
+
+static void forget_child(pid_t pid) {
+    for (sig_atomic_t i = 0; i < n_live; i++)
+        if (live[i] == pid) {
+            live[i] = live[--n_live];
+            return;
+        }
+}
+
+static void kill_live_children(void) {
+    for (sig_atomic_t i = 0; i < n_live; i++) {
+        kill(live[i], SIGKILL);
+        waitpid(live[i], NULL, 0);
+    }
+    n_live = 0;
 }
 
 static pid_t spawn(const char *exe, const char *name, unsigned id,
@@ -106,6 +143,8 @@ static pid_t spawn(const char *exe, const char *name, unsigned id,
                   "--seed", "7", "--log", log, (char *)NULL);
         _exit(127);
     }
+    if (pid != -1)
+        remember_child(pid);
     return pid;
 }
 
@@ -114,12 +153,15 @@ static pid_t spawn(const char *exe, const char *name, unsigned id,
 static int wait_exit(pid_t pid, int seconds) {
     for (int i = 0; i < seconds * 100; i++) {
         int st;
-        if (waitpid(pid, &st, WNOHANG) == pid)
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            forget_child(pid);
             return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+        }
         sleep_ms(10);
     }
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
+    forget_child(pid);
     return -1;
 }
 
@@ -379,6 +421,36 @@ static bool test_minimum_capacity(void) {
     return run_case("cap1", 1, 4, 4, 1000);
 }
 
+/* ---- Caso "Estres" ---------------------------------------------------- */
+
+/* 32 productores y 32 consumidores, el minimo que pide el enunciado y la
+ * mitad del limite de 64 casillas por rol (D8), con pausas desactivadas y
+ * cuota finita: 64 procesos corriendo a toda velocidad contra un buffer de
+ * 8 casillas en una maquina de 16 nucleos, o sea cuatro veces mas procesos
+ * que CPU. Las cuotas son finitas para que la corrida termine sola y el
+ * criterio "sin deadlock" se pueda medir: si un solo proceso quedara sin
+ * despertar, su wait_exit vence a los 30 s y el caso falla nombrandolo.
+ *
+ * La verificacion es la completa: ./verify cruza los 65 CSV como un solo
+ * conjunto de eventos. */
+static bool test_stress(void) {
+    return run_case("stress", 8, MAX_SIDE, MAX_SIDE, 1000);
+}
+
+/* Primero los hijos y despues los nombres: un consumidor vivo con el
+ * segmento mapeado no impide el shm_unlink, pero si se van en ese orden el
+ * proceso no deja nada atras en ningun camino de salida. */
+static void cleanup_all(void) {
+    kill_live_children();
+    unlink_all_names();
+}
+
+static void on_fatal_signal(int sig) {
+    (void)sig;
+    cleanup_all();
+    _exit(1);
+}
+
 int main(void) {
     if (access("./producer", X_OK) != 0 || access("./consumer", X_OK) != 0 ||
         access("./verify", X_OK) != 0) {
@@ -386,12 +458,23 @@ int main(void) {
                         "(correr desde la raiz con make test)\n");
         return 1;
     }
-    atexit(unlink_all_names);
+    atexit(cleanup_all);
+    /* El watchdog, un Ctrl-C o un `| head` que cierra la tuberia no pasan
+     * por atexit: la accion por defecto de SIGALRM, SIGINT, SIGTERM y
+     * SIGPIPE termina el proceso sin correr los handlers y dejaria hijos
+     * bloqueados y segmentos en /dev/shm. kill(), waitpid(), shm_unlink()
+     * y _exit() son async-signal-safe, asi que la misma limpieza sirve
+     * desde el handler. */
+    signal(SIGALRM, on_fatal_signal);
+    signal(SIGINT, on_fatal_signal);
+    signal(SIGTERM, on_fatal_signal);
+    signal(SIGPIPE, on_fatal_signal);
     alarm(180);   /* red de seguridad: los plazos por proceso son de 30 s */
     struct test_case tests[] = {
         {"fifo_basic", test_fifo_basic},
         {"concurrency", test_concurrency},
         {"minimum_capacity", test_minimum_capacity},
+        {"stress", test_stress},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;
