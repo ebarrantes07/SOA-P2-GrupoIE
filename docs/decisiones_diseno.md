@@ -2661,3 +2661,122 @@ verificadas) de los ~8.8 s de `make test` completo.
 El cierre con el ejecutable `finisher` y las carreras de ciclo de vida son
 el Issue #22; correr estos mismos cuatro casos bajo ASan y UBSan es el
 Issue #23.
+
+---
+
+## D31 — Las dos mutaciones que sobrevivían al cierre, y el límite ante caídas
+
+- **Fecha:** 2026-10-28
+- **Issue:** [#50](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/50)
+  (seguimiento de la revisión del PR #49, que aprobó el #17)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+> Numeración: D30 es la entrada del Issue #20, en el PR #55. Esta entrada
+> se escribió después y se mezcla después.
+
+### Contexto
+
+El código del cierre (#17) se aprobó sin pruebas que lo sostuvieran, para
+no frenar la ruta crítica, con el acuerdo de hacerlas en este issue. Lo que
+había que cubrir no era "¿funciona el cierre?" —eso ya lo mostraba el ciclo
+completo con los cinco ejecutables— sino dos **mutaciones que las 6 pruebas
+del finisher no distinguían**: el ciclo `while` de `closing_wait_all_left` y
+la transición a `STATE_CLOSED`. Una prueba que no cambia de resultado cuando
+el código se rompe no está probando esa línea.
+
+### El ciclo `while` y no un `if`
+
+`closing_wait_all_left` duerme en `all_left` mientras quede alguien
+conectado además del finisher. Con **un** participante, cambiar el ciclo por
+un `if` es indistinguible: hay un solo `signal` y después `refs` ya vale 1.
+
+Hacen falta **dos retiradas en momentos distintos**, y lo que hace la prueba
+es su **orden**, no su cantidad:
+
+| Momento de la retirada | Con `while` | Con `if` |
+|---|---|---|
+| A a los 150 ms (el finisher ya duerme) | sigue esperando a B | **libera las primitivas** |
+| B a los 500 ms | ALL_LEFT y liberación | B aborta en `pthread_mutex_lock` |
+
+Los 150 ms del primero son para que el finisher **ya esté dormido** cuando
+llegue ese `signal`. Si A se retirara antes del corte, `refs` valdría 2 al
+entrar al ciclo y un `if` también acabaría esperando a B: la mutación
+sobreviviría y la prueba no serviría de nada.
+
+`tests/test_finisher.c::waits_for_every_participant` exige las dos cosas que
+pide el criterio: que **los dos participantes salgan con 0** y que
+`ALL_LEFT.t_ns >= max(retiradas)`, con las marcas de retirada llegando por
+tubería desde cada participante. Los códigos de salida se comprueban
+**antes** de leer las tuberías para que el diagnóstico sea el del criterio y
+no un `read` fallido.
+
+### La transición a `STATE_CLOSED`
+
+No se puede observar desde el ejecutable: el finisher libera el nombre y
+desmapea, así que cuando termina ya no hay segmento que mirar. La prueba
+hace el cierre **en proceso**, con las tres llamadas en el orden de D10
+(`closing_begin` → `closing_wait_all_left` → `closing_release`), y lee el
+estado **antes de desmapear**:
+
+- tras el corte, `STATE_CLOSING` leído bajo el mutex;
+- tras `closing_release`, `STATE_CLOSED` leído **sin** mutex, porque ya no
+  hay mutex. Es legítimo por lo mismo que el finisher puede leer ahí los
+  agregados para el resumen (D10): la puerta está cerrada y este proceso es
+  el único conectado, así que nadie más puede escribir el segmento.
+
+No hace falta registrar a nadie: sin participantes activos ni mensajes
+pendientes se cumple la segunda rama de la precondición del corte, y
+`memory_create` no toma referencia de conexión (`refs == 0`, D9), así que
+`closing_wait_all_left` retorna con el mutex tomado sin llegar a dormir.
+
+### Resultado de las mutaciones
+
+| Mutación en `src/participants.c` | 6 pruebas originales | La prueba nueva |
+|---|---|---|
+| `while` → `if` en `closing_wait_all_left` | 6/6 pasan | **FALLA**: `sync: pthread_mutex_lock: Invalid argument` y `wait_exit(b, 5) == 0` |
+| quitar `inst->state = STATE_CLOSED` | 6/6 pasan | **FALLA**: `inst->state == STATE_CLOSED` |
+
+**Trampa al comprobar una mutación:** `make` solo relinkea los ejecutables,
+no los binarios de prueba. Correr `./build/test_finisher` después de tocar
+`src/` mide el binario viejo y la mutación parece "sobrevivir": pasó en este
+issue con la segunda mutación, que dio un falso negativo hasta pedir
+`make build/test_finisher`. Es la misma advertencia de D25, ahora con un
+segundo caso.
+
+### Límite: un participante que muere sin retirarse cuelga el cierre
+
+Medido con dos corridas que **solo** se diferencian en eso. En las dos
+quedan mensajes pendientes y ningún productor activo, así que la
+precondición del corte (D10) exige `active_consumers >= 1`:
+
+| Corrida | Lo que hizo el finisher | Código |
+|---|---|---|
+| A (control): 2 pendientes, **ningún** consumidor | `rechazado: no hay consumidores registrados y queda trabajo pendiente`, inmediato | 1 |
+| B: 4 pendientes y un consumidor **registrado** muerto con `SIGKILL` | `CLOSING: aceptados=4 extraidos=1 pendientes=3` y **no retorna** (5 s de plazo) | 124 |
+
+Que B pase la precondición es la prueba de que el muerto **sigue contado**
+como registrado; que no retorne es la prueba de que la espera no termina. El
+segmento queda en CLOSING y el nombre tomado: un `creator` posterior con ese
+nombre falla con `ya existe una instancia con ese nombre` (código 1).
+
+**No es un defecto.** El enunciado no pide recuperación ante caídas, y
+ponerle un plazo a la espera sería peor que el problema: el finisher
+destruiría el mutex y las condvars con alguien todavía vivo, que es
+exactamente el fallo que produce la mutación del `while` (D9 apoya la
+liberación en que `refs == 1`, no en un reloj). Recuperarse de verdad
+exigiría mutexes robustos (`PTHREAD_MUTEX_ROBUST` y `EOWNERDEAD`) y una
+política de qué hacer con los mensajes del caído, que está fuera de alcance.
+
+**Consecuencia práctica para el experimento (#24).** Si el script mata un
+proceso por plazo y después lanza el finisher, la corrida se estanca.
+`scripts/experimento.py` ya está armado para eso y conviene no deshacerlo:
+
+- el finisher se lanza **solo** después de que los productores terminaron
+  bien; si `wait_all` venció el plazo, mata a los procesos y la corrida se
+  marca `invalida` sin llegar a lanzarlo;
+- `kill_survivors` corre en el `finally` de cada corrida, después del
+  finisher, y `cleanup_segment` libera el nombre a mano para que la corrida
+  siguiente no choque con `MEM_EXISTS`;
+- el finisher corre con `timeout=120`, así que en el peor caso (un
+  participante que se cae por su cuenta mientras el cierre está en curso) la
+  corrida se marca `invalida` en vez de colgar el experimento.
