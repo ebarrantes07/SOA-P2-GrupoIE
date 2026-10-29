@@ -2259,6 +2259,124 @@ violaciones y `/dev/shm` quedó vacío.
 
 ---
 
+## D27 — Script del experimento (`scripts/experimento.py`)
+
+- **Fecha:** 2026-10-27
+- **Issue:** [#24](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/24)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+- **Traspaso:** el #24 era de Isaac; se movió a Emmanuel para no atrasar el
+  cronograma mientras Isaac termina el #19, el #22 y el #26.
+
+### Contexto
+
+El enunciado pide 45 corridas (3 capacidades × 3 escenarios de medias × 5
+repeticiones) con 4 productores y 4 consumidores de 200 mensajes cada
+productor, conservando las semillas, pidiendo el cierre cuando terminan los
+productores y guardando los CSV con nombres que identifiquen la combinación.
+
+### Python y no shell
+
+`scripts/fnv_ref.py` ya establecía el precedente de herramientas en Python
+(solo biblioteca estándar; el programa sigue siendo C/POSIX puro). Pero la
+razón de fondo es específica: un orquestador de 45 corridas que lanza 360
+procesos y corre desatendido no es lugar para la cantidad de trampas que
+tiene el shell con procesos en segundo plano. Durante este proyecto, tres
+errores propios lo demostraron:
+
+- un `wait $(jobs -p | head -2)` que esperaba a los procesos equivocados y
+  dejó que el shell matara consumidores **en medio de un `fprintf`**: el CSV
+  quedó terminando en `consumer,1,GET,82` sin salto de línea (el verificador
+  lo detectó, que es justo el peligro que #16 cubre);
+- un `pgrep -f "consumer --name /..."` que **se encontró a sí mismo**,
+  porque el patrón aparece en la línea de comandos del propio shell, y mató
+  la sesión;
+- un `"/dev/shm${N#/}"` sin la barra, que generaba `/dev/shmp2_kill_z` y
+  dejaba el segmento sin borrar.
+
+`subprocess` con `wait(timeout=...)` y listas de argumentos no tiene ninguno
+de esos filos.
+
+### Una corrida vencida es inválida, no una corrida con datos
+
+Si los productores no terminan dentro del plazo, la corrida se marca
+`invalida`, se registra el motivo y **no se lanza el finisher**. Esto último
+no es cosmético: con un participante muerto (o matado por el plazo), su
+referencia en `refs` nunca se suelta y `closing_wait_all_left` espera para
+siempre — medido en la revisión del PR #49 y anotado en el #50. Lanzar el
+finisher ahí colgaría la corrida entera del experimento.
+
+El plazo es generoso a propósito: lo que tardaría un solo proceso haciendo
+todo el trabajo en serie, por 4, con un piso de 30 s.
+
+### Teardown explícito de todo lo lanzado
+
+Toda corrida que no termina bien mata lo que siga vivo y lo deja anotado en
+el manifiesto (`[4 proceso(s) terminado(s) a la fuerza]`).
+
+Hizo falta por una razón medida, no supuesta: la primera versión mataba a
+los productores vencidos pero **dejaba a los consumidores**, que se quedan
+esperando en `not_empty` mientras la instancia siga en OPEN — y el corte no
+llega nunca, porque justamente no se lanza el finisher. Inyectando un plazo
+imposible, cada lote de 3 corridas fallidas dejaba **12 consumidores vivos**
+(4 por corrida), y sobrevivían entre invocaciones. Con las 45 corridas
+fallando serían 180 procesos colgados. Con el arreglo: 0.
+
+### Semillas reproducibles
+
+Cada proceso recibe `(base + indice_de_corrida * 1000 + desplazamiento_de_rol
++ i) % (2^32 - 1) + 1`. El `+ 1` final garantiza que nunca sale 0, que
+atasca `xorshift32` y la CLI rechaza (ver `rng.h`). Repetir el experimento
+con la misma `--base-seed` reproduce las mismas secuencias de pausas.
+Verificado: **360 semillas distintas para 360 procesos, ninguna repetida,
+ninguna igual a 0.**
+
+### El manifiesto es la interfaz con el #25
+
+`results/manifiesto.csv` trae una fila por corrida con sus parámetros, sus
+semillas, los códigos de salida, el resultado del verificador, la duración y
+los totales de aceptados y extraídos. El análisis (#25) itera sobre ese
+archivo en vez de deducir combinaciones de nombres de directorio, y se
+escribe con `flush` tras cada corrida, así sigue siendo útil si el
+experimento se interrumpe.
+
+Los CSV de cada corrida van a `results/<id>/` con
+`id = cap{C}_mp{MP}_mc{MC}_rep{R}`. `results/` está en `.gitignore` salvo
+`seleccionados/` (D7), así que las 9.8 MB de salida no entran al repositorio.
+
+### Orden de arranque
+
+Los consumidores se lanzan primero: al cortar hace falta al menos uno
+activo o `closing_begin` rechaza el cierre con `CLOSE_NO_CONSUMER`
+(precondición de D10). Además, a los 200 ms se revisa que ninguno haya
+terminado ya: un consumidor que muere al arrancar (ruta de log inválida, por
+ejemplo) haría que el cierre se rechace mucho después, con la corrida
+entera gastada.
+
+### Resultados de la primera corrida completa
+
+**45/45 corridas válidas en 70 s**, todas con el verificador en 0 y con
+`accepted == extracted == 800` (4 productores × 200 mensajes).
+
+Un hallazgo para el #25: **la duración de la corrida casi no distingue la
+capacidad** (1.65–1.83 s en todas las combinaciones), porque el tiempo lo
+domina la suma de las pausas exponenciales y no la contención del buffer.
+Donde la capacidad sí aparece es en la latencia de inserción a extracción,
+que es la métrica que el enunciado pide. En el escenario 2/8 (productores
+rápidos, consumidores lentos, buffer que se llena), con 4000 muestras por
+capacidad:
+
+| Capacidad | Latencia media | p95 |
+|---|---|---|
+| 1 | 1.94 ms | 6.04 ms |
+| 8 | 16.02 ms | 26.38 ms |
+| 64 | 127.31 ms | 159.89 ms |
+
+Es el resultado clásico del buffer acotado: un buffer más grande absorbe el
+desbalance y, a cambio, los mensajes esperan más en cola. El experimento
+produce la señal que el análisis necesita.
+
+---
+
 ## D28 — Resumen final del finisher (`summary_write_csv`)
 
 - **Fecha:** 2026-10-28
