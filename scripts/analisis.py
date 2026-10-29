@@ -39,6 +39,17 @@ METRICS = [
     ("wait_data_frac",   "%",      1),
     ("wait_count_prod",  "count",  1),
     ("wait_count_cons",  "count",  1),
+    # El lado de la insercion y el de la extraccion vistos por operacion,
+    # que es la forma en que se leen como latencia y no como fraccion de
+    # vida: cuanto le cuesta a un productor cada insercion, cuanto dura un
+    # bloqueo cuando ocurre, y cada cuantas operaciones ocurre.
+    ("wait_per_op_prod",   "ms",    3),
+    ("wait_per_block_prod", "ms",   3),
+    ("block_rate_prod",    "%",     1),
+    ("wait_per_op_cons",   "ms",    3),
+    ("block_rate_cons",    "%",     1),
+    ("lock_per_op_prod",   "us",    2),
+    ("lock_per_op_cons",   "us",    2),
     ("lock_acquire",     "us",     1),
     ("active_interval",  "s",      3),
     ("close_duration",   "ms",     3),
@@ -133,6 +144,16 @@ def mean_of(participants, role, metric):
     return statistics.fmean(values)
 
 
+def per_participant_mean(participants, role, fn):
+    """Promedia una cantidad calculada por participante, no la razon de los
+    totales: cada proceso tiene su propio `ops`, asi que dividir los totales
+    pesaria mas al que mas trabajo hizo."""
+    values = [fn(p) for (r, _), p in participants.items() if r == role]
+    if not values:
+        die(f"ningun participante con rol {role}")
+    return statistics.fmean(values)
+
+
 def wait_fraction(participants, role, wait_metric):
     """Espera acumulada del rol como fraccion de su vida, en por ciento.
 
@@ -162,6 +183,21 @@ def run_metrics(instance, participants):
         "wait_data_frac":  wait_fraction(participants, "consumer", "wait_data"),
         "wait_count_prod": mean_of(participants, "producer", "wait_count"),
         "wait_count_cons": mean_of(participants, "consumer", "wait_count"),
+        "wait_per_op_prod": per_participant_mean(
+            participants, "producer", lambda p: p["wait_space"] / p["ops"] / NS_PER_MS),
+        "wait_per_block_prod": per_participant_mean(
+            participants, "producer",
+            lambda p: p["wait_space"] / p["wait_count"] / NS_PER_MS if p["wait_count"] else 0.0),
+        "block_rate_prod": per_participant_mean(
+            participants, "producer", lambda p: 100.0 * p["wait_count"] / p["ops"]),
+        "wait_per_op_cons": per_participant_mean(
+            participants, "consumer", lambda p: p["wait_data"] / p["ops"] / NS_PER_MS),
+        "block_rate_cons": per_participant_mean(
+            participants, "consumer", lambda p: 100.0 * p["wait_count"] / p["ops"]),
+        "lock_per_op_prod": per_participant_mean(
+            participants, "producer", lambda p: p["lock_acquire"] / p["ops"] / NS_PER_US),
+        "lock_per_op_cons": per_participant_mean(
+            participants, "consumer", lambda p: p["lock_acquire"] / p["ops"] / NS_PER_US),
         "lock_acquire":    (mean_of(participants, "producer", "lock_acquire")
                             + mean_of(participants, "consumer", "lock_acquire")) / 2 / NS_PER_US,
         "active_interval": instance["active_interval"] / NS_PER_S,

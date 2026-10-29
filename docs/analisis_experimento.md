@@ -93,6 +93,60 @@ cantidad de bloqueos por corrida (de 200 operaciones por proceso).
 
 Figura: `results/seleccionados/fig3_esperas.svg`.
 
+### 3.4 Costo por operación: el lado de la inserción
+
+La sección 3.2 mide la residencia de un mensaje en el buffer (`enqueue → dequeue`),
+que es una propiedad del *mensaje*. Lo que le cuesta a un **productor** cada
+inserción es otra cosa, y sale de dividir su espera acumulada entre sus
+operaciones. Se promedia por participante y después entre repeticiones: cada
+proceso tiene su propio contador de operaciones, así que dividir los totales
+pesaría más al que más trabajo hizo.
+
+**Espera del productor por inserción [ms]** y **porcentaje de inserciones que se
+bloquean**:
+
+| Capacidad | 2/8 ms | 5/5 ms | 8/2 ms |
+|---|---|---|---|
+| 1 | 5.905 ± 0.194 — 96.0 % | 0.980 ± 0.131 — 41.3 % | 0.005 ± 0.001 — 2.0 % |
+| 8 | 5.809 ± 0.364 — 95.1 % | 0.331 ± 0.129 — 13.2 % | 0.000 — 0.0 % |
+| 64 | 5.437 ± 0.293 — 86.2 % | 0.032 ± 0.071 — **1.2 %** | 0.000 — 0.0 % |
+
+**Duración de un bloqueo del productor cuando ocurre [ms]**:
+
+| Capacidad | 2/8 ms | 5/5 ms | 8/2 ms |
+|---|---|---|---|
+| 1 | 6.153 ± 0.227 | 2.371 ± 0.105 | 0.284 ± 0.149 |
+| 8 | 6.109 ± 0.333 | 2.488 ± 0.479 | 0.000 |
+| 64 | **6.307 ± 0.312** | 0.559 ± 1.249 | 0.000 |
+
+Tres lecturas, y la primera es la que no se ve en la 3.2:
+
+1. **En 2/8, insertar le cuesta al productor ~5.9 ms, tres veces su propia pausa de
+   2 ms**, y la capacidad no lo baja (5.905 → 5.437 ms de capacidad 1 a 64). Visto
+   por operación, el productor no está produciendo: está esperando.
+2. **La duración de cada bloqueo no depende de la capacidad**: ~6.2 ms en las tres
+   capacidades de 2/8. Es coherente con que la fije el ritmo al que el consumidor
+   libera casillas —una cada 2 ms al ritmo agregado de 500 msgs/s, y cuatro
+   productores disputándoselas— y no el tamaño del buffer. Lo único que la
+   capacidad mueve en ese escenario es la *frecuencia*, y apenas: del 96 % al 86 %
+   de las inserciones.
+3. **En 5/5 la capacidad sí ataca la frecuencia**: del 41.3 % al **1.2 %** de las
+   inserciones bloqueadas, y el costo por inserción cae 30 veces (0.980 → 0.032 ms).
+   Ese es, por el lado de la inserción, el mismo hecho que el +18 % de throughput de
+   la sección 4.
+
+Del lado de la extracción la figura es simétrica: 6.4–7.0 ms de espera por
+extracción y 98 % de extracciones bloqueadas en 8/2, contra 0.03–0.14 ms y menos del
+4 % en 2/8. Ese número del consumidor hay que leerlo con la advertencia de la
+sección 6: su espera incluye la espera final hasta el cierre.
+
+**La sincronización no es el costo.** Adquirir el mutex cuesta **menos de 1 µs por
+operación** en casi todas las celdas (0.24–0.63 µs los productores; 0.35–1.7 µs los
+consumidores, con una celda ruidosa de 3.80 ± 5.25 en 2/8 con capacidad 1), o sea
+entre tres y cuatro órdenes de magnitud por debajo de las pausas y de las esperas
+por la contraparte. Todo lo que se mide como "latencia" en este sistema es tiempo
+esperando al otro lado, no tiempo gastado en el protocolo.
+
 ## 4. Lectura: ¿aumentar la capacidad mejora, acumula o desplaza?
 
 **Las tres cosas, y cuál de ellas ocurre lo decide el balance entre los lados.**
@@ -122,7 +176,7 @@ En 5/5 ms ninguno de los dos es el cuello de botella, y es el único escenario d
 la capacidad **sí** mejora el throughput: 611 → 695 → **721 msgs/s** (+18 %), del
 76 % al 90 % del techo.
 
-El mecanismo está en la tabla de esperas: con capacidad 1, **los dos lados pierden
+El mecanismo está en las tablas de esperas (3.3 y 3.4): con capacidad 1, **los dos lados pierden
 tiempo a la vez** —el productor se bloquea 83 veces y el consumidor 87, el 16 % y
 el 21 % de su vida— sin que ninguno esté saturado. Esa es la firma del
 acoplamiento: como las pausas fluctúan tanto como su media, cada fluctuación de un
