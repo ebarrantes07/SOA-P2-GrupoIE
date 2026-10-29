@@ -2374,3 +2374,97 @@ capacidad:
 Es el resultado clásico del buffer acotado: un buffer más grande absorbe el
 desbalance y, a cambio, los mensajes esperan más en cola. El experimento
 produce la señal que el análisis necesita.
+
+---
+
+## D28 — Resumen final del finisher (`summary_write_csv`)
+
+- **Fecha:** 2026-10-28
+- **Issue:** [#18](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/18)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+D11 fijó qué se mide y en qué formato se reporta, y el #8 implementó los
+cálculos (histograma, media, percentil, throughput). Lo que faltaba era el
+escritor: `summary_write_csv` estaba **declarado en `metrics.h` sin cuerpo
+en ningún archivo**, y el `finisher` del #17 traía un
+`write_provisional_summary` marcado explícitamente como provisional, con
+solo los totales del corte.
+
+Esta entrada implementa el formato completo de D11 y retira el provisional.
+
+### Lo que cambia
+
+`src/metrics.c` gana `summary_write_csv`, y `src/finisher.c` pierde sus 27
+líneas de resumen provisional. El sitio de llamada y el manejo de errores
+del ejecutable no cambian: el provisional ya devolvía `0` o `-errno` y se
+reportaba al final, así que el reemplazo es de una línea.
+
+Las 13 filas de instancia y las 5 por participante son exactamente las de la
+tabla de D11. Se escribe **después** de `closing_release` y **antes** del
+`munmap`, que es el orden que D10 fija para el finisher: el segmento ya no
+tiene a nadie conectado, así que se lee sin mutex.
+
+### Los tres filos del formato
+
+**El percentil va en por ciento, no en fracción.**
+`lat_hist_percentile_ns` toma `p` en `(0, 100]` y lo verifica con un
+`assert`. Pasar `0.95` en vez de `95.0` **no dispara el assert**: calcula el
+percentil 0.95, que es casi el mínimo. Con `-DNDEBUG` tampoco habría assert
+que ayudara. El riesgo es que el número se vea plausible y esté mal por dos
+órdenes de magnitud. La prueba `summary_p95_is_percent` lo fija: con
+latencias de 1 a 100 ms, exige que el p95 caiga sobre los 80 ms.
+
+**Ninguna nota puede contener una coma.** El CSV de D12 no usa comillas, así
+que una coma en `note` partiría la fila en 7 campos y el lector vería basura.
+Las notas usan punto y coma, y `summary_load` en la prueba cuenta las comas
+de cada línea: una nota con coma rompe dos pruebas.
+
+**Un participante que no se retiró no tiene `left_ns`.** Calcular
+`left_ns - joined_ns` sobre una casilla activa da un número enorme, porque
+la resta de enteros sin signo envuelve. La fila `lifetime` informa 0 con la
+nota `no se retiro; sin duracion valida`. No debería pasar —el finisher avisa
+si quedan activos— pero el resumen es justo el lugar donde se vería, y un
+número absurdo es peor que un cero explicado.
+
+### Esperas combinadas, declaradas (tercer criterio del issue)
+
+El criterio dice que una medición que combina causas se documente así en vez
+de presentarse como exclusiva de una. Va en la columna `note`:
+
+| Fila | Nota |
+|---|---|
+| `wait_data` (consumidor) | `espera por datos en not_empty; incluye la espera final hasta el cierre` |
+| `wait_space` (productor) | `espera por espacio en not_full; no incluye la pausa simulada` |
+| `lock_acquire` | `incluye la readquisicion al despertar de cond_wait` |
+| `latency_p95` | `aproximada por histograma; error <= 6.25 %` |
+| `rejected_puts` | `intentos rechazados por el corte; no son aceptados` |
+
+La de `rejected_puts` importa más de lo que parece: por D24, vale 0 o 1 por
+productor —es el intento con el que cada uno descubre el corte— y **no mide
+trabajo perdido**.
+
+### Medido
+
+Corrida real con 3 productores y 3 consumidores de 300 mensajes, pausas de
+2 ms:
+
+```text
+accepted,instance,0,900,msgs,
+extracted,instance,0,900,msgs,
+invariant_ok,instance,0,1,bool,1 si accepted = extracted + pending y pending = 0
+latency_mean,instance,0,3029063.621111,ns,exacta
+latency_p95,instance,0,7077888,ns,aproximada por histograma; error <= 6.25 %
+throughput,instance,0,1187.185592,msgs_per_s,primer inicio de trabajador a ultima extraccion
+```
+
+La suma de `ops` de los consumidores da los 900 extraídos de la instancia;
+la prueba `summary_participant_rows` lo exige como invariante.
+
+Cinco mutaciones, todas detectadas: percentil como fracción, nombres de
+espera intercambiados entre roles, una coma en una nota, `lifetime` sin el
+guardia, e `invariant_ok` fijo en 1.
+
+El manifiesto del experimento (D27) lee `accepted` y `extracted` por nombre
+de métrica, así que el formato nuevo le sirve sin cambios.
