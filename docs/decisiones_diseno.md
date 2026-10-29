@@ -1427,7 +1427,7 @@ se rechaza con `-EINVAL` sin escribir nada.
   `fwrite`, así una fila nunca queda partida entre dos escrituras.
 
 **Archivo:** `csv_logger_open` crea o trunca el archivo y escribe la
-cabecera; si falla, no queda nada abierto. Desde D30 trunca solo después
+cabecera; si falla, no queda nada abierto. Desde D32 trunca solo después
 de tomar un candado de escritura: si otro proceso vivo escribe ese
 archivo, devuelve `-EBUSY` sin tocarlo. Se usa el buffer de `stdio`
 (no se vacía en cada fila) para que el log cueste lo menos posible durante
@@ -2519,11 +2519,13 @@ El límite de 64 registros por rol durante la vida de la instancia (D8)
 queda como está: cumple el mínimo de 32 del enunciado y es una decisión de
 diseño documentada, con un rechazo claro (`REG_TABLE_FULL`, código 1).
 
-## D30 — Pruebas de validación y aislamiento; el log no se trunca a otro proceso
+## D32 — Pruebas de validación y aislamiento; el log no se trunca a otro proceso
 
 - **Fecha:** 2026-10-28
 - **Issue:** [#19](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/19)
 - **Quién decide:** Isaac · **Revisa:** Emmanuel
+- **Numeración:** D32 porque D30 (Issue #20, PR #55) y D31 (Issue #50,
+  PR #56) se abrieron antes.
 
 ### Contexto
 
