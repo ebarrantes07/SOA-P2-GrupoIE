@@ -12,17 +12,29 @@ experimental.
 | Emmanuel Barrantes Vargas | 200012366 | [ebarrantes07](https://github.com/ebarrantes07) |
 | Isaac Moreno Fuentes | 2018119181 | [ifmoreno-sp](https://github.com/ifmoreno-sp) |
 
-## Entorno objetivo
+## Entorno
 
-- GNU/Linux de 64 bits
-- GCC y GNU make
-- C17 con APIs POSIX (memoria compartida `shm_open`/`mmap`, primitivas de sincronización
-  configuradas para compartirse entre procesos)
+**Objetivo:** GNU/Linux de 64 bits, GCC y GNU make, C17 con APIs POSIX (memoria compartida
+`shm_open`/`mmap` y primitivas de sincronización configuradas para compartirse entre procesos).
+
+**Probado en:**
+
+| Componente | Versión |
+|---|---|
+| Sistema | Ubuntu 24.04.4 LTS, x86-64 (contenedor Docker) |
+| Compilador | GCC 13.3.0 |
+| make | GNU Make 4.3 |
+| Biblioteca C | glibc 2.39 |
+
+`make test`, las corridas con ASan/UBSan y el experimento se validaron en ese entorno, compilando
+desde una copia limpia del repositorio. El desarrollo se hizo además en macOS (Apple clang), donde
+el código compila, pero la suite completa necesita Linux: algunas pruebas usan `/proc` y
+`MAP_ANONYMOUS`, y macOS no implementa `pthread_condattr_setclock` (ver D13 y D20).
 
 ## Compilación
 
 ```bash
-make          # compila los ejecutables: creator, producer, consumer, finisher
+make          # compila los ejecutables: creator, producer, consumer, finisher y verify
 make test     # ejecuta las pruebas automatizadas (código ≠ 0 ante un incumplimiento)
 make clean    # elimina objetos y ejecutables
 ```
@@ -55,12 +67,48 @@ grupo, [SOA-P1-GrupoIE](https://github.com/ifmoreno-sp/SOA-P1-GrupoIE) (`src/rng
 nuevo en este proyecto es el muestreo exponencial por transformada inversa
 (`rng_uniform01` y `rng_exponential_ms`), que el Proyecto 1 no tenía.
 
+**Licencia:** el Proyecto 1 es trabajo propio de los mismos integrantes, así que su código se
+reutiliza sin restricciones de terceros. El checksum del payload usa el algoritmo FNV-1a
+(Fowler–Noll–Vo), que sus autores publicaron en el dominio público; se implementó desde su
+especificación, sin copiar código de terceros. Los scripts de `scripts/` usan solo la biblioteca
+estándar de Python.
+
 El resto del código es original de este proyecto.
 
 ## Uso
 
-_Se completa a medida que se implementan los ejecutables (interfaz mínima del enunciado,
-formatos CSV y protocolo de ejecución y cierre)._
+### Protocolo de ejecución y cierre
+
+Cada ejecutable es un proceso independiente; se lanzan en terminales separadas o desde un script.
+
+```bash
+./creator  --name /soa_p2_g1 --capacity 8                                                   # 1
+./consumer --name /soa_p2_g1 --id 1 --mean-ms 10 --seed 11 --log results/c1.csv &          # 2
+./producer --name /soa_p2_g1 --id 1 --mean-ms 5 --seed 21 --messages 1000 --log results/p1.csv  # 3
+./finisher --name /soa_p2_g1 --summary results/resumen.csv --log results/fin.csv          # 4
+./verify   results/p1.csv results/c1.csv results/fin.csv                                   # 5
+```
+
+1. **`creator`** crea la instancia y termina cuando ya acepta participantes (estado OPEN).
+2. **Consumidores** y **productores** se conectan por el nombre y se registran con un `--id` único
+   en su rol. Pueden entrar en cualquier orden mientras la instancia esté OPEN. Un productor
+   espera bloqueado con el buffer lleno; un consumidor, con el buffer vacío.
+3. Los productores se retiran solos al cumplir su cuota (`--messages`). Sin cuota siguen hasta
+   el cierre.
+4. **`finisher`** conduce el cierre:
+   - exige al menos un consumidor registrado, salvo que no queden productores activos ni
+     mensajes pendientes; si no, rechaza con código 1 y la instancia sigue OPEN;
+   - pasa a **CLOSING**, que es el punto de corte: desde ahí no se aceptan inserciones ni
+     participantes nuevos, y despierta a todos los que esperaban;
+   - los productores bloqueados o en pausa se retiran sin insertar nada más; los consumidores
+     **drenan todo lo aceptado**, terminan de procesar lo que retiraron y se retiran;
+   - cuando ya no queda nadie conectado, pasa a **CLOSED**, destruye las primitivas, elimina
+     el nombre (que queda libre para crear otra instancia) y escribe el resumen.
+5. **`verify`** cruza los CSV y confirma que no hubo pérdidas, duplicados, contenido alterado
+   ni violaciones de FIFO, y que el cierre cuadra.
+
+Solo puede haber un cierre en curso: un segundo `finisher` se rechaza con código 1. No se usan
+señales de terminación como mecanismo normal de cierre.
 
 ### creator
 
@@ -124,6 +172,61 @@ y termina con código 1. Los eventos se muestran en la consola y, con `--log`, t
 
 ✓ = obligatoria. Cualquier argumento inválido, faltante, repetido o desconocido termina con un
 mensaje en `stderr` y código 1. `--help` muestra el uso de cada ejecutable.
+
+### verify
+
+```bash
+./verify results/p*.csv results/c*.csv results/fin.csv
+```
+
+Lee los CSV de una corrida y termina con 0 si no hay violaciones, 1 si encuentra alguna (pérdida,
+duplicado, mensaje fantasma, identidad repetida, contenido alterado, orden FIFO, inserción después
+del corte o cierre inconsistente, cada una con su identidad) y 2 si no pudo leer una entrada.
+Detalles en D16.
+
+## Formatos CSV
+
+### Log de cada proceso (`--log`)
+
+Un archivo por proceso, con cabecera y las mismas 13 columnas para productor, consumidor y
+finisher. Una columna que no aplica al evento queda vacía. Todas las marcas de tiempo son de
+`CLOCK_MONOTONIC`, en nanosegundos.
+
+```
+role,id,event,t_ns,producer_id,sequence,enqueue_seq,dequeue_seq,enqueue_time_ns,occupancy,checksum,payload_ok,detail
+```
+
+| Evento | Rol | Columnas que lleva |
+|---|---|---|
+| `JOIN` / `JOIN_REJECTED` | productor, consumidor | `detail` (pid, o el motivo del rechazo) |
+| `PUT` | productor | `producer_id, sequence, enqueue_seq, enqueue_time_ns, occupancy, checksum` |
+| `PUT_REJECTED` | productor | `producer_id, sequence, detail = closing` |
+| `GET` | consumidor | `producer_id, sequence, enqueue_seq, dequeue_seq, enqueue_time_ns, occupancy, checksum, payload_ok` |
+| `PROCESSED` | consumidor | `producer_id, sequence, dequeue_seq` |
+| `DRAINED` | consumidor | `occupancy` |
+| `LEAVE` | productor, consumidor | `detail` (`quota_done`, `closing` o `drained`) |
+| `CLOSE_REQUEST`, `ALL_LEFT` | finisher | — |
+| `CLOSE_REJECTED` | finisher | `detail` (`no_consumer` o `already_closing`) |
+| `CLOSING` | finisher | `enqueue_seq` (aceptados), `dequeue_seq` (extraídos), `occupancy` (pendientes) en el corte |
+| `CLOSED` | finisher | `detail = released` |
+
+`occupancy`, `enqueue_seq`, `dequeue_seq` y `t_ns` de `PUT`/`GET` se capturan dentro de la
+operación protegida; la escritura al archivo ocurre después de soltar el mutex. Formato completo
+en D12 y D17.
+
+### Resumen del finisher (`--summary`)
+
+Una métrica por fila:
+
+```
+metric,role,id,value,unit,note
+```
+
+Filas de la instancia (`role = instance`): `accepted`, `extracted`, `pending`, `rejected_puts`,
+`invariant_ok`, `latency_mean`, `latency_p95` (aproximada por histograma), `latency_max`,
+`throughput`, `active_interval`, `close_duration`, `producers` y `consumers`. Filas por
+participante: `ops`, `wait_space` o `wait_data`, `wait_count`, `lock_acquire` y `lifetime`. La
+columna `note` declara cuándo una medición combina varias causas. Formato completo en D11 y D28.
 
 ## Experimento
 

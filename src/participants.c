@@ -237,14 +237,10 @@ void closing_wait_all_left(struct instance *inst) {
     while ((atomic_load(&inst->refs) & REFS_COUNT_MASK) > 1)
         sync_wait_all_left(inst);
 
-    /* Con refs == 1 todo participante ya pasó por participant_leave antes
-     * de desconectarse. Si un contador quedó en otro valor, alguien se
-     * desconectó sin retirarse: es un error de quien programa, pero el
-     * finisher igual tiene que liberar, así que solo se avisa. */
-    if (inst->active_producers != 0 || inst->active_consumers != 0)
-        fprintf(stderr, "participants: cierre con activos sin retirar (productores=%u, consumidores=%u)\n",
-                inst->active_producers, inst->active_consumers);
-    /* Retorna con el mutex tomado (participants.h). */
+    /* Retorna con el mutex tomado (participants.h). No escribe nada acá:
+     * el enunciado pide la E/S fuera de la región crítica, así que quien
+     * llama captura lo que necesite (por ejemplo, activos sin retirar) y
+     * lo reporta después de closing_release (D29). */
 }
 
 int closing_release(struct instance *inst, const char *name) {

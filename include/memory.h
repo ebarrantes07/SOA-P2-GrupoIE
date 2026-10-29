@@ -56,6 +56,53 @@ struct message {
     struct payload   payload;
 };
 
+/* ---- Estado protegido y propiedad de los recursos (D29) ----------------
+ *
+ * Cómo se protege cada campo de struct instance:
+ *
+ *   Campo                         Protección
+ *   ----------------------------  ---------------------------------------------
+ *   magic                         atómico; el creator lo escribe una sola vez,
+ *                                 al final (release), y se lee con acquire (D1)
+ *   version, capacity             inmutables después de publicar magic: se leen
+ *                                 sin mutex una vez validado magic (D1, D13)
+ *   mutex, not_full, not_empty,   las primitivas mismas: el creator las inicia
+ *   closing, all_left             antes de publicar y el finisher las destruye
+ *                                 cuando refs == 1 (D9, D10)
+ *   state                         mutex (lo escriben el creator antes de
+ *                                 publicar y el finisher en el corte y al cerrar)
+ *   head, tail, count, messages[] mutex (buffer.h asume el mutex tomado, D2)
+ *   enqueue_seq, dequeue_seq      mutex (asignados en sync_put / sync_get, D3)
+ *   active_producers/consumers    mutex (registro y retiro, D8)
+ *   producers, consumers (tablas) mutex (registro y retiro, D8)
+ *   metrics                       mutex mientras hay participantes; el finisher
+ *                                 la lee sin mutex cuando ya no queda nadie
+ *                                 conectado (D11, D26)
+ *   refs                          atómico: se incrementa con CAS sin mutex al
+ *                                 conectarse; se decrementa y se cierra la
+ *                                 puerta bajo el mutex (D9)
+ *
+ * Propiedad de los recursos (quién crea y quién destruye):
+ *
+ *   Recurso                       Crea                     Destruye / libera
+ *   ----------------------------  -----------------------  --------------------------
+ *   nombre del segmento           creator (shm_open        finisher (shm_unlink en
+ *                                 O_CREAT|O_EXCL)          closing_release)
+ *   objeto de memoria             creator (ftruncate)      el kernel, al último munmap
+ *   mapeo de cada proceso         cada proceso (mmap)      el mismo proceso (munmap)
+ *   primitivas de sincronización  creator (sync_init_      finisher (closing_release,
+ *                                 primitives, antes de     con refs == 1)
+ *                                 publicar magic)
+ *   referencia de conexión        instance_attach          instance_detach (el
+ *                                                          finisher no la suelta:
+ *                                                          libera todo)
+ *   casilla de registro           participant_register     nunca se libera: queda
+ *                                                          SLOT_LEFT de por vida (D8)
+ *   CSV de cada proceso           ese proceso              ese proceso
+ *
+ * Las precondiciones de cada operación están en su header (buffer.h,
+ * sync.h, participants.h, memory.h).
+ */
 struct instance {
     _Atomic uint32_t magic;        /* se escribe ultimo, ver D1, "Publicacion segura" */
     uint32_t         version;

@@ -113,13 +113,28 @@ int main(int argc, char **argv) {
              snap.accepted, snap.extracted, snap.pending);
     journal(&j, &rec, text);
 
+    /* Con el mutex tomado solo se capturan datos; la consola y el CSV se
+     * escriben después de soltarlo en closing_release, como pide el
+     * enunciado para toda escritura de archivos (D29). */
     closing_wait_all_left(inst);       /* retorna con el mutex tomado */
-    csv_record_event(&rec, CSV_ALL_LEFT, now_monotonic_ns(), NULL);
-    journal(&j, &rec, "todos los participantes se retiraron");
+    uint64_t all_left_ns = now_monotonic_ns();
+    uint32_t stray_producers = inst->active_producers;
+    uint32_t stray_consumers = inst->active_consumers;
 
-    int rel = closing_release(inst, opt.name);
-    uint64_t close_ns = now_monotonic_ns() - snap.closing_ns;   /* hasta la liberación (D11) */
-    csv_record_event(&rec, CSV_CLOSED, now_monotonic_ns(), rel == 0 ? "released" : "release_error");
+    int rel = closing_release(inst, opt.name);                  /* suelta el mutex */
+    uint64_t released_ns = now_monotonic_ns();
+    uint64_t close_ns = released_ns - snap.closing_ns;          /* hasta la liberación (D11) */
+
+    csv_record_event(&rec, CSV_ALL_LEFT, all_left_ns, NULL);
+    journal(&j, &rec, "todos los participantes se retiraron");
+    /* Con refs == 1 todo participante ya pasó por participant_leave antes
+     * de desconectarse. Si un contador quedó en otro valor, alguien se
+     * desconectó sin retirarse: error de quien programa, pero el cierre
+     * igual se completó, así que solo se avisa. */
+    if (stray_producers != 0 || stray_consumers != 0)
+        fprintf(stderr, "finisher: cierre con activos sin retirar (productores=%" PRIu32
+                ", consumidores=%" PRIu32 ")\n", stray_producers, stray_consumers);
+    csv_record_event(&rec, CSV_CLOSED, released_ns, rel == 0 ? "released" : "release_error");
     snprintf(text, sizeof(text), "CLOSED: recursos liberados en %.3f ms", (double)close_ns / 1e6);
     journal(&j, &rec, text);
 

@@ -152,7 +152,8 @@ enum close_result closing_begin(struct instance *inst,
 /* Toma el mutex y duerme en all_left mientras (refs & REFS_COUNT_MASK) > 1,
  * es decir, mientras quede alguien conectado además del propio finisher.
  * Retorna con el mutex tomado; desde ahí nadie más puede volver a tocar
- * las primitivas. */
+ * las primitivas. No hace E/S: quien llama captura lo que necesite
+ * mientras tiene el mutex y lo escribe después de closing_release (D29). */
 void closing_wait_all_left(struct instance *inst);
 
 /* Pasa a CLOSED, suelta el mutex, destruye las primitivas y hace

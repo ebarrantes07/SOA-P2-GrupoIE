@@ -2468,3 +2468,51 @@ guardia, e `invariant_ok` fijo en 1.
 
 El manifiesto del experimento (D27) lee `accepted` y `extracted` por nombre
 de métrica, así que el formato nuevo le sirve sin cambios.
+
+---
+
+## D29 — Verificación final contra el enunciado
+
+- **Fecha:** 2026-10-28
+- **Issue:** [#53](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/53)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+
+### Contexto
+
+Antes de la entrega se recorrió el enunciado frase por frase contra el
+código. Todos los casos de la tabla "Pruebas mínimas de funcionamiento"
+pasaron con los ejecutables reales (incluidos estrés 32+32 y cierre en plena
+actividad con ASan y UBSan), pero aparecieron cuatro puntos donde el texto
+del enunciado no se cumplía al pie de la letra.
+
+### Decisiones
+
+- **Ninguna escritura con el mutex tomado.** `closing_wait_all_left`
+  retorna con el mutex tomado (D9) y el finisher escribía la fila
+  `ALL_LEFT` antes de `closing_release`. Ahora, con el mutex tomado, solo
+  captura la marca de tiempo y los contadores de activos; la consola, el
+  CSV y el aviso de activos sin retirar se escriben después de soltarlo.
+  `closing_wait_all_left` no hace E/S. Es el mismo patrón de "capturar
+  bajo protección y escribir después" que siguen `sync_put`/`sync_get`
+  (D3) y el corte (D21). La fila `CLOSED` usa la misma marca con la que se
+  mide la duración del cierre.
+- **`clock_gettime` revisado en la pausa del productor**
+  (`deadline_from_now`), con `perror` + `abort` como `now_monotonic_ns`
+  (#34): un plazo basura haría que la pausa durara cualquier cosa sin
+  aviso.
+- **Estado protegido y propiedad de recursos documentados en `memory.h`**,
+  junto a `struct instance`: qué campos protege el mutex, cuáles son
+  atómicos (`magic`, `refs`), cuáles son inmutables después de publicar
+  (`version`, `capacity`), y quién crea y quién destruye cada recurso
+  (nombre, objeto, mapeo, primitivas, referencia de conexión, casilla de
+  registro y CSV).
+- **README con la lista obligatoria del enunciado:** entorno probado
+  (además del objetivo), protocolo de ejecución y cierre paso a paso, uso
+  de `verify`, formatos CSV de los logs y del resumen, y licencia del
+  material reutilizado.
+
+### Fuera de alcance
+
+El límite de 64 registros por rol durante la vida de la instancia (D8)
+queda como está: cumple el mínimo de 32 del enunciado y es una decisión de
+diseño documentada, con un rechazo claro (`REG_TABLE_FULL`, código 1).

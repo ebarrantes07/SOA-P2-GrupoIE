@@ -317,7 +317,14 @@ enum get_result sync_get(struct instance *inst, struct message *out,
 /* Plazo absoluto a `ms` milisegundos de ahora, en el reloj de la condvar.
  * Precondicion: ms > 0 y finito (lo garantiza sync_pause_ms). */
 static void deadline_from_now(struct timespec *out, double ms) {
-    clock_gettime(SYNC_COND_CLOCK, out);
+    /* Revisado y no ignorado, igual que now_monotonic_ns (#34): con un
+     * clock_gettime fallido el plazo seria basura y la pausa duraria
+     * cualquier cosa sin un solo aviso. clock_gettime usa errno, a
+     * diferencia de las pthread_* (D18, D29). */
+    if (clock_gettime(SYNC_COND_CLOCK, out) != 0) {
+        perror("sync: clock_gettime del plazo de la pausa");
+        abort();
+    }
 
     uint64_t ns = (uint64_t)(ms * 1000000.0);
     out->tv_sec += (time_t)(ns / 1000000000ull);
