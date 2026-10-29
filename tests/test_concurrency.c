@@ -352,6 +352,33 @@ static bool test_fifo_basic(void) {
     return run_case("fifo", 8, 1, 1, 1000);
 }
 
+/* ---- Caso "Concurrencia" ---------------------------------------------- */
+
+/* Cuatro productores y cuatro consumidores, capacidad 8, 1000 mensajes por
+ * productor: 4000 mensajes por un buffer de 8 casillas, unas 500 vueltas
+ * completas al arreglo circular. A ningun consumidor le toca un
+ * subconjunto fijo de mensajes: cual extrae cada uno depende del orden en
+ * que not_empty los despierte, y es justo ese reparto variable el que no
+ * puede perder ni duplicar nada. */
+static bool test_concurrency(void) {
+    return run_case("conc", 8, 4, 4, 1000);
+}
+
+/* ---- Caso "Capacidad minima" ------------------------------------------ */
+
+/* Capacidad 1: el caso borde del buffer circular, donde la unica casilla es
+ * a la vez la que se escribe y la que se lee, y cada insercion tiene que
+ * esperar a que la extraccion anterior la libere. Con 4 y 4, ocho procesos
+ * se pasan el turno por ese unico lugar; si una senal se perdiera (un
+ * signal donde hacia falta broadcast, D18) la corrida se quedaria clavada y
+ * wait_exit lo reportaria como deadlock en vez de colgar la suite.
+ *
+ * Misma corrida que el caso de concurrencia (4 y 4, 1000 mensajes por
+ * productor) para que la unica variable entre los dos sea la capacidad. */
+static bool test_minimum_capacity(void) {
+    return run_case("cap1", 1, 4, 4, 1000);
+}
+
 int main(void) {
     if (access("./producer", X_OK) != 0 || access("./consumer", X_OK) != 0 ||
         access("./verify", X_OK) != 0) {
@@ -363,6 +390,8 @@ int main(void) {
     alarm(180);   /* red de seguridad: los plazos por proceso son de 30 s */
     struct test_case tests[] = {
         {"fifo_basic", test_fifo_basic},
+        {"concurrency", test_concurrency},
+        {"minimum_capacity", test_minimum_capacity},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;
