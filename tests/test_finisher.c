@@ -388,6 +388,47 @@ static bool test_resolves_connection_in_progress(void) {
     return true;
 }
 
+/* Criterio 2 de #50: closing_release deja la instancia en STATE_CLOSED.
+ *
+ * No se puede observar desde el ejecutable: el finisher libera el nombre y
+ * desmapea, así que cuando termina ya no hay segmento que mirar. Por eso el
+ * cierre se hace acá mismo, con las tres llamadas en el orden de D10, y el
+ * estado se lee después de closing_release y antes de desmapear.
+ *
+ * Esa lectura va sin el mutex porque ya no hay mutex: closing_release
+ * destruyó las primitivas. Es legítima por lo mismo que el finisher puede
+ * leer los agregados para el resumen en ese punto (D10): la puerta está
+ * cerrada y este proceso es el único conectado, así que nadie más puede
+ * escribir el segmento. */
+static bool test_release_sets_closed(void) {
+    const char *name = name_for("closed");
+    struct instance *inst;
+    size_t len;
+    CHECK(memory_create(name, 4, &inst, &len) == MEM_OK);
+
+    /* Sin participantes activos ni mensajes pendientes se cumple la segunda
+     * rama de la precondición del corte (D10), así que no hace falta
+     * registrar a nadie para que closing_begin acepte. */
+    CHECK(closing_begin(inst, NULL) == CLOSE_OK);
+    sync_lock(inst);
+    int cutting = inst->state;
+    sync_unlock(inst);
+    CHECK(cutting == STATE_CLOSING);
+
+    /* memory_create no toma referencia de conexión (refs == 0, ver D9), así
+     * que el predicado de all_left ya se cumple: esto retorna con el mutex
+     * tomado sin llegar a dormir. */
+    closing_wait_all_left(inst);
+    CHECK(closing_release(inst, name) == 0);
+    CHECK(inst->state == STATE_CLOSED);
+
+    struct instance *gone;
+    size_t gone_len;
+    CHECK(memory_open(name, &gone, &gone_len) == MEM_NOT_FOUND);   /* nombre liberado */
+    CHECK(memory_unmap(inst, len) == 0);
+    return true;
+}
+
 static bool test_rejected_without_consumer(void) {
     const char *name = name_for("noconsumer");
     char *log = path_for("noconsumer", "fin"), *sum = path_for("noconsumer", "sum");
@@ -520,6 +561,7 @@ int main(void) {
         {"waits_for_registered_participant", test_waits_for_registered_participant},
         {"waits_for_every_participant", test_waits_for_every_participant},
         {"resolves_connection_in_progress", test_resolves_connection_in_progress},
+        {"release_sets_closed", test_release_sets_closed},
         {"rejected_without_consumer", test_rejected_without_consumer},
         {"second_finisher_rejected", test_second_finisher_rejected},
         {"recreate_after_close", test_recreate_after_close},
