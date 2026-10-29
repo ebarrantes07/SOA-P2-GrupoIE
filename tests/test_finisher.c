@@ -132,11 +132,12 @@ static bool wait_not_open(struct instance *inst) {
 }
 
 /* Participante simulado en un proceso hijo. Avisa por `ready` cuando ya
- * está conectado (y registrado si `reg`), espera el corte, se queda
- * `hold_ms` más y se va. Antes de desconectarse escribe su marca de
- * tiempo por `done`. Sin registro, intenta registrarse tarde y sale con
- * 10 si recibió REG_NOT_OPEN. */
-static pid_t spawn_participant(const char *name, bool reg, long hold_ms, int ready[2], int done[2]) {
+ * está conectado (y registrado como consumidor `id` si `reg`), espera el
+ * corte, se queda `hold_ms` más y se va. Antes de desconectarse escribe su
+ * marca de tiempo por `done`. Sin registro, intenta registrarse tarde con
+ * ese mismo `id` y sale con 10 si recibió REG_NOT_OPEN. */
+static pid_t spawn_participant(const char *name, bool reg, unsigned id, long hold_ms,
+                               int ready[2], int done[2]) {
     pid_t pid = fork();
     if (pid != 0)
         return pid;
@@ -148,7 +149,7 @@ static pid_t spawn_participant(const char *name, bool reg, long hold_ms, int rea
     if (instance_attach(name, &inst, &len) != ATTACH_OK)
         _exit(2);
     int slot = -1;
-    if (reg && participant_register(inst, ROLE_CONSUMER, 77, &slot) != REG_OK)
+    if (reg && participant_register(inst, ROLE_CONSUMER, id, &slot) != REG_OK)
         _exit(3);
     char c = 'r';
     if (write(ready[1], &c, 1) != 1)
@@ -161,7 +162,7 @@ static pid_t spawn_participant(const char *name, bool reg, long hold_ms, int rea
         participant_leave(inst, ROLE_CONSUMER, slot, NULL);
     } else {
         int s2;
-        code = participant_register(inst, ROLE_CONSUMER, 78, &s2) == REG_NOT_OPEN ? 10 : 6;
+        code = participant_register(inst, ROLE_CONSUMER, id, &s2) == REG_NOT_OPEN ? 10 : 6;
     }
     uint64_t t = now_monotonic_ns();
     if (write(done[1], &t, sizeof(t)) != (ssize_t)sizeof(t))
@@ -262,7 +263,7 @@ static bool test_waits_for_registered_participant(void) {
     CHECK(create(name, 4));
     int ready[2], done[2];
     CHECK(pipe(ready) == 0 && pipe(done) == 0);
-    pid_t p = spawn_participant(name, true, 300, ready, done);
+    pid_t p = spawn_participant(name, true, 77, 300, ready, done);
     close(ready[1]);
     close(done[1]);
     char c;
@@ -292,6 +293,71 @@ static bool test_waits_for_registered_participant(void) {
     return true;
 }
 
+/* Criterio 1 de #50: el ciclo `while` de closing_wait_all_left es un ciclo
+ * y no un `if`.
+ *
+ * Con un solo participante la mutación a `if` pasa inadvertida: hay un solo
+ * signal y después refs ya vale 1. Hacen falta dos que se retiren en
+ * momentos distintos: el primero despierta al finisher y, sin el ciclo,
+ * este libera las primitivas con el segundo todavía conectado, que muere al
+ * tomar un mutex ya destruido (`pthread_mutex_lock: Invalid argument`).
+ *
+ * Los 150 ms del primero son para que el finisher ya esté dormido en
+ * all_left cuando llegue ese signal. Si se retirara antes del corte, el
+ * `if` también terminaría esperando al segundo y la mutación sobreviviría:
+ * el orden de las dos retiradas es lo que hace la prueba, no su cantidad. */
+static bool test_waits_for_every_participant(void) {
+    const char *name = name_for("twowait");
+    char *log = path_for("twowait", "fin"), *sum = path_for("twowait", "sum");
+    CHECK(create(name, 4));
+    int ready_a[2], done_a[2], ready_b[2], done_b[2];
+    CHECK(pipe(ready_a) == 0 && pipe(done_a) == 0);
+    CHECK(pipe(ready_b) == 0 && pipe(done_b) == 0);
+    pid_t a = spawn_participant(name, true, 81, 150, ready_a, done_a);
+    pid_t b = spawn_participant(name, true, 82, 500, ready_b, done_b);
+    close(ready_a[1]);
+    close(done_a[1]);
+    close(ready_b[1]);
+    close(done_b[1]);
+    char c;
+    CHECK(read(ready_a[0], &c, 1) == 1);
+    CHECK(read(ready_b[0], &c, 1) == 1);   /* los dos conectados y registrados */
+
+    CHECK(wait_exit(spawn_finisher(name, sum, log), 10) == 0);
+
+    /* Los códigos primero: sin el ciclo, el segundo participante aborta al
+     * tomar un mutex destruido y el síntoma queda en su código de salida.
+     * Esperarlos antes de leer las tuberías no bloquea: los dos escriben
+     * sus 8 bytes antes de desconectarse y el buffer de la tubería los
+     * aguanta de sobra. */
+    CHECK(wait_exit(a, 5) == 0);
+    CHECK(wait_exit(b, 5) == 0);
+
+    uint64_t left_a, left_b;
+    CHECK(read(done_a[0], &left_a, sizeof(left_a)) == (ssize_t)sizeof(left_a));
+    CHECK(read(done_b[0], &left_b, sizeof(left_b)) == (ssize_t)sizeof(left_b));
+
+    struct log_row *rows;
+    size_t n;
+    CHECK(load_rows(log, &rows, &n));
+    const struct log_row *all_left = find_event(rows, n, LOG_EVENT_ALL_LEFT);
+    uint64_t last_leave = left_a > left_b ? left_a : left_b;
+    bool after = all_left != NULL && all_left->t_ns >= last_leave;
+    free(rows);
+    CHECK(after);                          /* ALL_LEFT no es anterior a la última retirada */
+
+    struct instance *inst;
+    size_t len;
+    CHECK(memory_open(name, &inst, &len) == MEM_NOT_FOUND);
+    close(ready_a[0]);
+    close(done_a[0]);
+    close(ready_b[0]);
+    close(done_b[0]);
+    unlink(log);
+    unlink(sum);
+    return true;
+}
+
 /* Criterio 2: una conexión en curso (conectado, sin registrar) al cortar. */
 static bool test_resolves_connection_in_progress(void) {
     const char *name = name_for("inflight");
@@ -299,7 +365,7 @@ static bool test_resolves_connection_in_progress(void) {
     CHECK(create(name, 4));
     int ready[2], done[2];
     CHECK(pipe(ready) == 0 && pipe(done) == 0);
-    pid_t p = spawn_participant(name, false, 300, ready, done);
+    pid_t p = spawn_participant(name, false, 78, 300, ready, done);
     close(ready[1]);
     close(done[1]);
     char c;
@@ -319,6 +385,47 @@ static bool test_resolves_connection_in_progress(void) {
     CHECK(after);                        /* esperó también a la conexión sin registro */
     unlink(log);
     unlink(sum);
+    return true;
+}
+
+/* Criterio 2 de #50: closing_release deja la instancia en STATE_CLOSED.
+ *
+ * No se puede observar desde el ejecutable: el finisher libera el nombre y
+ * desmapea, así que cuando termina ya no hay segmento que mirar. Por eso el
+ * cierre se hace acá mismo, con las tres llamadas en el orden de D10, y el
+ * estado se lee después de closing_release y antes de desmapear.
+ *
+ * Esa lectura va sin el mutex porque ya no hay mutex: closing_release
+ * destruyó las primitivas. Es legítima por lo mismo que el finisher puede
+ * leer los agregados para el resumen en ese punto (D10): la puerta está
+ * cerrada y este proceso es el único conectado, así que nadie más puede
+ * escribir el segmento. */
+static bool test_release_sets_closed(void) {
+    const char *name = name_for("closed");
+    struct instance *inst;
+    size_t len;
+    CHECK(memory_create(name, 4, &inst, &len) == MEM_OK);
+
+    /* Sin participantes activos ni mensajes pendientes se cumple la segunda
+     * rama de la precondición del corte (D10), así que no hace falta
+     * registrar a nadie para que closing_begin acepte. */
+    CHECK(closing_begin(inst, NULL) == CLOSE_OK);
+    sync_lock(inst);
+    int cutting = inst->state;
+    sync_unlock(inst);
+    CHECK(cutting == STATE_CLOSING);
+
+    /* memory_create no toma referencia de conexión (refs == 0, ver D9), así
+     * que el predicado de all_left ya se cumple: esto retorna con el mutex
+     * tomado sin llegar a dormir. */
+    closing_wait_all_left(inst);
+    CHECK(closing_release(inst, name) == 0);
+    CHECK(inst->state == STATE_CLOSED);
+
+    struct instance *gone;
+    size_t gone_len;
+    CHECK(memory_open(name, &gone, &gone_len) == MEM_NOT_FOUND);   /* nombre liberado */
+    CHECK(memory_unmap(inst, len) == 0);
     return true;
 }
 
@@ -364,7 +471,7 @@ static bool test_second_finisher_rejected(void) {
     CHECK(create(name, 4));
     int ready[2], done[2];
     CHECK(pipe(ready) == 0 && pipe(done) == 0);
-    pid_t p = spawn_participant(name, true, 800, ready, done);   /* demora el primer cierre */
+    pid_t p = spawn_participant(name, true, 77, 800, ready, done);   /* demora el primer cierre */
     close(ready[1]);
     close(done[1]);
     char c;
@@ -452,7 +559,9 @@ int main(void) {
     struct test_case tests[] = {
         {"close_without_workers", test_close_without_workers},
         {"waits_for_registered_participant", test_waits_for_registered_participant},
+        {"waits_for_every_participant", test_waits_for_every_participant},
         {"resolves_connection_in_progress", test_resolves_connection_in_progress},
+        {"release_sets_closed", test_release_sets_closed},
         {"rejected_without_consumer", test_rejected_without_consumer},
         {"second_finisher_rejected", test_second_finisher_rejected},
         {"recreate_after_close", test_recreate_after_close},
