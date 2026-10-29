@@ -2519,6 +2519,151 @@ diseño documentada, con un rechazo claro (`REG_TABLE_FULL`, código 1).
 
 ---
 
+## D30 — Pruebas de conservación y escala: un arnés y cuatro corridas (`tests/test_concurrency.c`)
+
+- **Fecha:** 2026-10-28
+- **Issue:** [#20](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/20)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+### Contexto
+
+El enunciado pide cuatro casos de la tabla de pruebas mínimas —FIFO básico,
+concurrencia, capacidad mínima y estrés— que no se diferencian en *qué* hay
+que comprobar, sino en *con cuántos procesos*: en los cuatro, lo que no
+puede pasar es perder, duplicar, alterar o desordenar un mensaje. Por eso
+#7 bloquea a #20 (D16): el verificador existe para que estas pruebas puedan
+afirmar algo más fuerte que "no crasheó".
+
+### Decisión
+
+Un solo arnés parametrizado (`run_start` / `run_join` / `run_verify`) y
+cuatro casos de una línea. Cada corrida levanta `./producer` y `./consumer`
+de verdad, con cuota finita para que termine sola, y afirma contra **dos
+fuentes independientes**:
+
+1. los contadores de la instancia leídos **en una sola región crítica**
+   (`read_counters`): `enqueue_seq == N × cuota` al retirarse los
+   productores, y `dequeue_seq == N × cuota`, `count == 0`,
+   `active_consumers == 0` al terminar los consumidores. Dos lecturas
+   sueltas afuera del mutex quedarían mutuamente inconsistentes, por lo
+   mismo que `struct close_snapshot` (D21);
+2. `./verify` sobre todos los CSV de la corrida.
+
+| Caso | P | C | Capacidad | Cuota | Mensajes | CSV | Filas de log |
+|---|---|---|---|---|---|---|---|
+| FIFO básico | 1 | 1 | 8 | 1000 | 1 000 | 3 | 3 006 |
+| Concurrencia | 4 | 4 | 8 | 1000 | 4 000 | 9 | 12 021 |
+| Capacidad mínima | 4 | 4 | **1** | 1000 | 4 000 | 9 | 12 021 |
+| Estrés | 32 | 32 | 8 | 1000 | 32 000 | 65 | 96 161 |
+
+La cuota es 1000 en los cuatro para que entre concurrencia y capacidad
+mínima la **única** variable sea la capacidad. Con un solo consumidor
+(FIFO básico) el orden de extracción es un orden total, así que el chequeo
+FIFO de `./verify` queda en su forma más estricta: cada mensaje sale en la
+misma posición en que entró. El estrés usa 32 por rol, el mínimo del
+enunciado y la mitad del límite de 64 casillas por rol (D8).
+
+### El corte lo hace la prueba, no `./finisher`
+
+Como en `test_blocking.c` (D25), el paso a CLOSING se hace con
+`closing_begin` dentro del proceso de prueba y se escribe su fila CLOSING.
+Así la instancia **sigue mapeada** después del corte y se pueden leer los
+contadores bajo el mutex; `closing_release` destruiría las primitivas y
+haría inválido el mapeo justo en el momento en que hay que afirmar. El
+protocolo de cierre completo con el ejecutable real es el Issue #22.
+
+### Pausas en 0
+
+Los cuatro casos corren con `--mean-ms 0`. No es por ahorrar tiempo: medido
+en la corrida de 4+4, con las pausas desactivadas los productores
+acumularon 165 esperas en `not_full` y los consumidores ~115 en
+`not_empty`, o sea que las dos esperas bloqueantes se ejercitan igual, con
+la máxima contención posible sobre el buffer. La variedad de medias de
+pausa es el eje del experimento (#24, D27), no de estas pruebas.
+
+### Esperar el registro de los consumidores y no el de los productores
+
+`run_start` espera a que los N consumidores estén registrados antes de
+levantar los productores, y del lado productor **no espera registro**: un
+consumidor no se retira hasta el cierre, así que su contador sube y no
+baja, pero un productor puede cumplir su cuota y retirarse antes de que el
+último se registre, y un `wait_for(active_producers == N)` se colgaría sin
+que haya ningún error. Lo que se habría comprobado con esa espera lo cubre
+igual la comparación de `enqueue_seq` contra `N × cuota`, que no tiene
+carrera.
+
+### Deadlock
+
+El criterio "sin deadlock" se mide con plazos, no con la ausencia de
+síntomas: `wait_exit` devuelve `-1` si el proceso no termina en 30 s y el
+caso falla nombrando al que no avanzó (`"consumidor 1 terminó con -1 (no
+terminó en el plazo: deadlock)"`); `alarm(180)` es la red por si el que se
+cuelga es el propio proceso de prueba.
+
+### Los hijos y los caminos de falla
+
+Cada proceso lanzado queda anotado hasta que `wait_exit` lo cosecha, y lo
+que quede se mata al salir. Hacía falta: si `run_join` se va **antes** del
+corte a CLOSING (por ejemplo porque un productor terminó con código ≠ 0),
+los consumidores siguen esperando datos que ya nadie va a insertar y
+quedaban bloqueados para siempre —32 de ellos en el caso de estrés—
+aunque la prueba ya hubiera terminado. `kill()` sobre un pid anotado no
+puede caer en un proceso ajeno: un hijo que el padre no cosechó sigue
+siendo zombie o vivo, así que el núcleo no puede reciclar su pid.
+
+La misma limpieza corre desde un handler de SIGALRM, SIGINT, SIGTERM y
+SIGPIPE, cuya acción por defecto termina el proceso **sin** pasar por
+`atexit` y dejaba hijos bloqueados y segmentos en `/dev/shm`. Apareció al
+correr la prueba con `| head`, que cierra la tubería. `kill()`,
+`waitpid()`, `shm_unlink()` y `_exit()` son async-signal-safe, así que la
+misma función sirve en los dos caminos.
+
+### Que no pase sola: las mutaciones
+
+Una prueba de integración que pasa sin ejercitar nada es peor que no
+tenerla, así que cada afirmación se falsificó:
+
+| Mutación | Lo que reportó |
+|---|---|
+| `expected + 1` en `run_join` | `fifo: 1000 aceptados y 0 productores activos; se esperaban 1001 y 0` |
+| Borrar **una** fila `GET` de un CSV antes de verificar | `mensaje perdido: insertado y nunca extraido` + `cierre incompleto: CLOSING dice 4000, los logs dicen 3999` |
+| `SIGSTOP` a un consumidor tras el corte | `consumidor 1 termino con -1 (no termino en el plazo: deadlock)` |
+| Fallar antes del corte a CLOSING (estrés) | el caso falla **y** no quedan 32 consumidores huérfanos ni segmentos en `/dev/shm` |
+
+La segunda es la que prueba el cableado completo de `./verify`: que las 9
+rutas llegan, que el código de salida se honra y que el reporte se imprime
+cuando hay violaciones.
+
+### Detalles de implementación
+
+- `run_verify` arma el comando en un buffer del tamaño justo porque el caso
+  de estrés pasa **65** archivos, y lee la salida de `./verify` con `popen`
+  **hasta EOF** aunque ya no la guarde: cortar al llenar el buffer dejaría
+  a `verify` bloqueado escribiendo en una tubería llena y `pclose` esperaría
+  para siempre.
+- La salida de `verify` se imprime solo si hubo violaciones (limitadas a 20
+  por `MAX_PRINTED`, D16), para que `make test` no se llene de ruido.
+- `cut` está repetido de `test_blocking.c` en vez de vivir en `test_util.h`:
+  ese header no incluye ningún header del proyecto a propósito (solo
+  `stdbool`, `stddef` y `stdio`), y moverlo ahí le metería `memory.h` y
+  `logger.h` a todas las pruebas, incluidas las de módulos que no tocan la
+  instancia.
+- Si un caso falla, sus CSV **quedan** en `build/` para poder mirarlos; solo
+  se borran cuando el caso pasa.
+
+### Costo
+
+Las cuatro corridas tardan ~0.9 s (41 000 mensajes y 123 000 filas de log
+verificadas) de los ~8.8 s de `make test` completo.
+
+### Fuera de alcance
+
+El cierre con el ejecutable `finisher` y las carreras de ciclo de vida son
+el Issue #22; correr estos mismos cuatro casos bajo ASan y UBSan es el
+Issue #23.
+
+---
+
 ## D31 — Las dos mutaciones que sobrevivían al cierre, y el límite ante caídas
 
 - **Fecha:** 2026-10-28
