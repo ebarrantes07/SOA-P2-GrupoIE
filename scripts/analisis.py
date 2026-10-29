@@ -231,7 +231,7 @@ def write_csv(agg, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "agregados.csv")
     with open(path, "w", newline="") as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator="\n")
         w.writerow(["capacity", "mean_prod_ms", "mean_cons_ms", "metric", "unit",
                     "mean", "sd", "n"])
         for (cap, mp, mc), stats in sorted(agg.items()):
