@@ -189,7 +189,8 @@ Detalles en D16.
 ### Log de cada proceso (`--log`)
 
 Un archivo por proceso, con cabecera y las mismas 13 columnas para productor, consumidor y
-finisher. Una columna que no aplica al evento queda vacía. Todas las marcas de tiempo son de
+finisher. Si el archivo ya existe se sobrescribe, salvo que otro proceso en ejecución lo esté
+escribiendo: entonces el nuevo proceso termina con código 1 sin tocarlo (D30). Una columna que no aplica al evento queda vacía. Todas las marcas de tiempo son de
 `CLOCK_MONOTONIC`, en nanosegundos.
 
 ```

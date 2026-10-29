@@ -7,9 +7,11 @@
 #include "logger.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "memory.h"
 #include "sync.h"
@@ -135,9 +137,34 @@ int csv_format_row(char *buf, size_t len, enum csv_role role, uint32_t id,
 int csv_logger_open(struct csv_logger *lg, const char *path,
                     enum csv_role role, uint32_t id) {
     lg->f = NULL;
-    FILE *f = fopen(path, "w");
-    if (f == NULL)
+    /* No se usa fopen(path, "w"): trunca al abrir, antes de saber si otro
+     * proceso vivo escribe en ese archivo. Un participante rechazado (id
+     * duplicado, instancia inexistente) con el mismo --log que uno en
+     * curso le vaciaba el CSV a ese otro, que seguía escribiendo en su
+     * posición y dejaba un hueco de bytes nulos (#19). Se abre sin
+     * truncar, se toma un candado de escritura de todo el archivo sin
+     * esperar, y solo con el candado se trunca. El candado se suelta solo
+     * al cerrar o al morir el proceso, así que no queda pegado. */
+    int fd = open(path, O_WRONLY | O_CREAT, 0644);
+    if (fd == -1)
         return -errno;
+    struct flock lk = { .l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0 };
+    if (fcntl(fd, F_SETLK, &lk) == -1) {
+        int e = (errno == EACCES || errno == EAGAIN) ? EBUSY : errno;
+        close(fd);
+        return -e;
+    }
+    if (ftruncate(fd, 0) == -1) {
+        int e = errno;
+        close(fd);
+        return -e;
+    }
+    FILE *f = fdopen(fd, "w");
+    if (f == NULL) {
+        int e = errno;
+        close(fd);
+        return -e;
+    }
     if (fprintf(f, "%s\n", CSV_HEADER) < 0) {
         int e = errno ? errno : EIO;
         fclose(f);
@@ -147,6 +174,12 @@ int csv_logger_open(struct csv_logger *lg, const char *path,
     lg->role = role;
     lg->id = id;
     return 0;
+}
+
+const char *csv_logger_open_str(int rc) {
+    if (rc == -EBUSY)
+        return "otro proceso en ejecucion ya escribe en ese archivo";
+    return strerror(-rc);
 }
 
 int csv_logger_write(struct csv_logger *lg, const struct csv_record *rec) {
