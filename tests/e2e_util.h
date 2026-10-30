@@ -28,26 +28,75 @@ static inline void e2e_sleep_ms(long ms) {
     nanosleep(&d, NULL);
 }
 
-/* ---- Nombres y archivos con limpieza ---------------------------------- */
+/* ---- Limpieza: hijos, nombres y archivos ----------------------------- */
 
-/* Todo se borra con atexit: CHECK sale de la prueba en el acto y se
- * saltearía la limpieza, dejando segmentos en /dev/shm. */
+/* Todo se limpia al salir: CHECK sale de la prueba en el acto y se
+ * saltearía la limpieza, dejando segmentos en /dev/shm y procesos hijos
+ * bloqueados (un consumidor espera datos para siempre si la prueba falla
+ * antes del cierre). Mismo patrón que tests/test_concurrency.c (D30). */
 static char e2e_names[32][INSTANCE_NAME_MAX + 1];
-static int e2e_n_names;
-static char e2e_files[128][96];
-static int e2e_n_files;
+static volatile sig_atomic_t e2e_n_names;
+static char e2e_files[512][96];
+static volatile sig_atomic_t e2e_n_files;
 
+/* Cada hijo lanzado queda anotado hasta que e2e_wait lo cosecha. kill()
+ * sobre un pid anotado no puede caer en un proceso ajeno: un hijo que el
+ * padre no cosechó sigue siendo zombie o vivo, y su pid no se recicla. */
+static pid_t e2e_live[256];
+static volatile sig_atomic_t e2e_n_live;
+
+static inline void e2e_remember_child(pid_t pid) {
+    if (pid <= 0)
+        return;
+    if (e2e_n_live == (sig_atomic_t)(sizeof(e2e_live) / sizeof(e2e_live[0])))
+        abort();
+    e2e_live[e2e_n_live++] = pid;
+}
+
+static inline void e2e_forget_child(pid_t pid) {
+    for (sig_atomic_t i = 0; i < e2e_n_live; i++)
+        if (e2e_live[i] == pid) {
+            e2e_live[i] = e2e_live[--e2e_n_live];
+            return;
+        }
+}
+
+/* Primero los hijos y después los nombres y archivos. Solo usa kill,
+ * waitpid, unlink y shm_unlink, así que también sirve desde el handler de
+ * señales. shm_unlink no está en la lista async-signal-safe de POSIX; en
+ * glibc es un unlink sobre /dev/shm, y para una prueba alcanza. */
 static inline void e2e_cleanup(void) {
+    for (sig_atomic_t i = 0; i < e2e_n_live; i++) {
+        kill(e2e_live[i], SIGKILL);
+        waitpid(e2e_live[i], NULL, 0);
+    }
+    e2e_n_live = 0;
     for (int i = 0; i < e2e_n_names; i++)
         memory_unlink(e2e_names[i]);
     for (int i = 0; i < e2e_n_files; i++)
         unlink(e2e_files[i]);
 }
 
+static inline void e2e_on_fatal_signal(int sig) {
+    (void)sig;
+    e2e_cleanup();
+    _exit(1);
+}
+
+/* La alarma de main, un Ctrl-C o un `| head` que cierra la tubería no
+ * pasan por atexit: su acción por defecto termina el proceso sin limpiar. */
+static inline void e2e_install_cleanup(void) {
+    atexit(e2e_cleanup);
+    signal(SIGALRM, e2e_on_fatal_signal);
+    signal(SIGINT, e2e_on_fatal_signal);
+    signal(SIGTERM, e2e_on_fatal_signal);
+    signal(SIGPIPE, e2e_on_fatal_signal);
+}
+
 /* Nombre de instancia único por proceso de prueba y etiqueta; borra uno
  * viejo con el mismo nombre si una corrida anterior murió a medias. */
 static inline const char *e2e_name(const char *prefix, const char *tag) {
-    if (e2e_n_names == (int)(sizeof(e2e_names) / sizeof(e2e_names[0])))
+    if (e2e_n_names == (sig_atomic_t)(sizeof(e2e_names) / sizeof(e2e_names[0])))
         abort();
     char *b = e2e_names[e2e_n_names++];
     snprintf(b, sizeof(e2e_names[0]), "/%s_%d_%s", prefix, (int)getpid(), tag);
@@ -57,7 +106,7 @@ static inline const char *e2e_name(const char *prefix, const char *tag) {
 
 /* Ruta en build/ (make test ya la creó), borrada al salir. */
 static inline const char *e2e_path(const char *prefix, const char *tag, const char *who) {
-    if (e2e_n_files == (int)(sizeof(e2e_files) / sizeof(e2e_files[0])))
+    if (e2e_n_files == (sig_atomic_t)(sizeof(e2e_files) / sizeof(e2e_files[0])))
         abort();
     char *b = e2e_files[e2e_n_files++];
     snprintf(b, sizeof(e2e_files[0]), "build/%s_%d_%s_%s", prefix, (int)getpid(), tag, who);
@@ -93,6 +142,7 @@ static inline pid_t e2e_spawnv(const char *err_path, const char *exe, va_list ap
         execv(exe, (char *const *)argv);
         _exit(127);
     }
+    e2e_remember_child(pid);
     return pid;
 }
 
@@ -112,13 +162,16 @@ static inline int e2e_wait(pid_t pid, int seconds) {
         return -1;
     for (int i = 0; i < seconds * 100; i++) {
         int st;
-        if (waitpid(pid, &st, WNOHANG) == pid)
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            e2e_forget_child(pid);
             return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+        }
         e2e_sleep_ms(10);
     }
     fprintf(stderr, "  el proceso %ld no termino en %d s\n", (long)pid, seconds);
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
+    e2e_forget_child(pid);
     return -1;
 }
 

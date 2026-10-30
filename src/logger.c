@@ -11,6 +11,7 @@
 #include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "memory.h"
@@ -144,20 +145,34 @@ int csv_logger_open(struct csv_logger *lg, const char *path,
      * posición y dejaba un hueco de bytes nulos (#19). Se abre sin
      * truncar, se toma un candado de escritura de todo el archivo sin
      * esperar, y solo con el candado se trunca. El candado se suelta solo
-     * al cerrar o al morir el proceso, así que no queda pegado. */
+     * al cerrar o al morir el proceso, así que no queda pegado.
+     *
+     * Solo para archivos regulares (D32). /dev/null, un FIFO o una
+     * terminal no se pueden truncar (ftruncate da EINVAL) ni tienen
+     * contenido que proteger, y /dev/null es un solo archivo para toda la
+     * máquina: con candado, un solo proceso a la vez podría usar
+     * `--log /dev/null`. Esos se usan tal cual, como con fopen("w"). */
     int fd = open(path, O_WRONLY | O_CREAT, 0644);
     if (fd == -1)
         return -errno;
-    struct flock lk = { .l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0 };
-    if (fcntl(fd, F_SETLK, &lk) == -1) {
-        int e = (errno == EACCES || errno == EAGAIN) ? EBUSY : errno;
-        close(fd);
-        return -e;
-    }
-    if (ftruncate(fd, 0) == -1) {
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
         int e = errno;
         close(fd);
         return -e;
+    }
+    if (S_ISREG(st.st_mode)) {
+        struct flock lk = { .l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0 };
+        if (fcntl(fd, F_SETLK, &lk) == -1) {
+            int e = (errno == EACCES || errno == EAGAIN) ? EBUSY : errno;
+            close(fd);
+            return -e;
+        }
+        if (ftruncate(fd, 0) == -1) {
+            int e = errno;
+            close(fd);
+            return -e;
+        }
     }
     FILE *f = fdopen(fd, "w");
     if (f == NULL) {

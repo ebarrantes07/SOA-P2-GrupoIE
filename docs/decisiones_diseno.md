@@ -2822,7 +2822,8 @@ de `stdio`.
 `csv_logger_open` abre **sin truncar** (`open` con `O_WRONLY | O_CREAT`),
 toma un candado de escritura de todo el archivo con `fcntl(F_SETLK)` sin
 esperar, y solo con el candado trunca (`ftruncate`) y escribe la cabecera.
-Si otro proceso tiene el candado, devuelve `-EBUSY` sin modificar nada y
+Si otro proceso tiene el candado, devuelve `-EBUSY` sin modificar el
+archivo y
 el ejecutable termina con código 1 y el mensaje *"otro proceso en
 ejecucion ya escribe en ese archivo"* (`csv_logger_open_str`). El candado
 se suelta al cerrar el archivo o al morir el proceso, así que un proceso
@@ -2839,6 +2840,24 @@ Alternativas descartadas:
 Los candados de `fcntl` son por proceso: dos aperturas del mismo archivo
 dentro de un mismo proceso no se excluyen. Eso no pasa en los ejecutables
 (cada uno abre un solo log).
+
+**Solo archivos regulares.** Con `fstat` se mira qué se abrió, y el
+candado y el truncado se aplican solo si es un archivo regular
+(`S_ISREG`). Lo demás (`/dev/null`, un FIFO, una terminal) se usa tal
+cual, igual que con `fopen("w")`: no tiene contenido que proteger, no se
+puede truncar (`ftruncate` da `EINVAL` sobre un dispositivo) y `/dev/null`
+es un solo archivo para toda la máquina, así que con candado un solo
+proceso a la vez podría usar `--log /dev/null`. La primera versión de este
+cambio lo rompía; lo encontró la revisión de Emmanuel, porque
+`scripts/efecto_logs.py` (#25) usa `--log /dev/null` en 9 procesos a la
+vez como línea base para medir el efecto de los logs.
+
+**Qué deja un rechazo en el disco.** `open(..., O_CREAT)` crea el archivo
+si no existía, antes de mirar el candado. Pero un rechazo por candado
+implica que otro proceso ya tenía ese archivo abierto, o sea que existía:
+lo que se garantiza es que su contenido no cambia. Los rechazos por
+registro (id duplicado, instancia inexistente) sí escriben su CSV con la
+fila de rechazo, a propósito (D23).
 
 ### Pruebas
 
@@ -2860,9 +2879,19 @@ dentro de un mismo proceso no se excluyen. Eso no pasa en los ejecutables
   exactamente uno; y tres vidas seguidas del mismo nombre con distinta
   capacidad, reusando los mismos ids.
 - `test_logger.c`: `open_busy_keeps_other_file`, con otro proceso
-  sosteniendo el candado.
+  sosteniendo el candado, y `open_dev_null_shared`, con dos procesos
+  usando `/dev/null` a la vez.
 
-Mutaciones detectadas (en Docker): volver a `fopen("w")`, quitar
-`O_EXCL`, aceptar capacidad 0, no hacer `shm_unlink` al cerrar, aceptar el
-id duplicado, y considerar duplicado solo a los activos. La suite completa
-pasa con ASan y UBSan (191 pruebas).
+Mutaciones detectadas (en Docker): volver a `fopen("w")` en el logger,
+quitar `O_EXCL` del `shm_open` de `memory_create` (no del logger: ahí
+`O_EXCL` es la alternativa descartada de arriba), aceptar capacidad 0, no
+hacer `shm_unlink` al cerrar, aceptar el id duplicado, y considerar
+duplicado solo a los activos.
+
+Las pruebas que lanzan procesos (`e2e_util.h`) matan a los hijos que
+queden vivos al salir, también si la salida es por `SIGALRM`, `SIGINT`,
+`SIGTERM` o `SIGPIPE`, que no pasan por `atexit`. Es el mismo patrón que
+`test_concurrency.c` (D30). `test_logger.c` tiene su propio `alarm`, y el
+padre cierra los extremos de tubería que no usa, para que la muerte del
+hijo le llegue como EOF y no como una espera eterna. La suite completa
+pasa con ASan y UBSan (198 pruebas).

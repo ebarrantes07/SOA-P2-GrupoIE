@@ -114,13 +114,13 @@ static bool test_creator_capacity_rejected(void) {
 }
 
 static bool test_invalid_names(void) {
-    const char *err = P("names", "err");
+    const char *err = P("names", "err"), *summary = P("names", "s");
     const char *bad[] = { "sin_barra", "/", "/a/b", "/con espacio", "/acento_\xc3\xa9",
                           "/1234567890123456789012345678901" /* 31 tras '/' */ };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         CHECK(e2e_run(err, "./creator", "--name", bad[i], "--capacity", "4", NULL) == 1);
         CHECK(e2e_file_has(err, "--name invalido"));
-        CHECK(e2e_run(err, "./finisher", "--name", bad[i], "--summary", P("names", "s"), NULL) == 1);
+        CHECK(e2e_run(err, "./finisher", "--name", bad[i], "--summary", summary, NULL) == 1);
         CHECK(e2e_file_has(err, "--name invalido"));
     }
     return true;
@@ -207,7 +207,7 @@ static bool test_worker_numbers_rejected(void) {
 
 static bool test_missing_instance(void) {
     const char *name = e2e_name("t19v", "ghost");
-    const char *err = P("ghost", "err");
+    const char *err = P("ghost", "err"), *summary = P("ghost", "s");
     const char *needle = "no existe una instancia con ese nombre";
 
     CHECK(e2e_run(err, "./producer", "--name", name, "--id", "1", "--mean-ms", "0", "--seed", "1",
@@ -216,12 +216,12 @@ static bool test_missing_instance(void) {
     CHECK(e2e_run(err, "./consumer", "--name", name, "--id", "1", "--mean-ms", "0", "--seed", "1",
                   "--log", P("ghost", "c"), NULL) == 1);
     CHECK(e2e_file_has(err, needle));
-    CHECK(e2e_run(err, "./finisher", "--name", name, "--summary", P("ghost", "s"), NULL) == 1);
+    CHECK(e2e_run(err, "./finisher", "--name", name, "--summary", summary, NULL) == 1);
     CHECK(e2e_file_has(err, needle));
 
     /* Ninguno la creó por accidente, y el finisher no dejó resumen. */
     CHECK(!e2e_instance_exists(name));
-    CHECK(!e2e_file_exists(P("ghost", "s")));
+    CHECK(!e2e_file_exists(summary));
     return true;
 }
 
@@ -285,7 +285,7 @@ int main(void) {
                         "(correr desde la raiz con make test)\n");
         return 1;
     }
-    atexit(e2e_cleanup);
+    e2e_install_cleanup();
     alarm(120);   /* tope global; cada proceso hijo tiene además el suyo */
     struct test_case tests[] = {
         {"missing_arguments", test_missing_arguments},

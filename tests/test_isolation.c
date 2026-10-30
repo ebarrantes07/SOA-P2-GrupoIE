@@ -237,7 +237,7 @@ int main(void) {
                         "(correr desde la raiz con make test)\n");
         return 1;
     }
-    atexit(e2e_cleanup);
+    e2e_install_cleanup();
     alarm(120);   /* tope global; cada proceso hijo tiene además el suyo */
     struct test_case tests[] = {
         {"two_names_do_not_interfere", test_two_names_do_not_interfere},

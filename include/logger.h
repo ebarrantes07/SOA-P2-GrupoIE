@@ -79,10 +79,12 @@ struct csv_logger {
 };
 
 /* Crea (o trunca) el archivo y escribe la cabecera. Devuelve 0 o -errno;
- * si falla no queda nada abierto. El archivo queda con un candado de
- * escritura (fcntl) hasta csv_logger_close: si otro proceso vivo ya lo
- * tiene abierto con este logger, devuelve -EBUSY SIN truncarlo, así un
- * proceso rechazado no destruye el CSV de otra ejecución (#19). */
+ * si falla no queda nada abierto. Un archivo regular queda con un candado
+ * de escritura (fcntl) hasta csv_logger_close: si otro proceso vivo ya lo
+ * tiene abierto con este logger, devuelve -EBUSY SIN modificarlo, así un
+ * proceso rechazado no destruye el CSV de otra ejecución (#19). Lo que no
+ * es un archivo regular (/dev/null, un FIFO) se usa tal cual, sin candado
+ * ni truncado (D32). */
 int csv_logger_open(struct csv_logger *lg, const char *path,
                     enum csv_role role, uint32_t id);
 
