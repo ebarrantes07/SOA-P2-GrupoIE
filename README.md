@@ -250,13 +250,80 @@ reproduce las mismas secuencias de pausas. Detalles en `docs/decisiones_diseno.m
 
 ## Gestión y trazabilidad
 
-El trabajo se organizó en 32 Issues con criterios de aceptación explícitos, 29 de ellos
-cerrados, y 31 Pull Requests integrados —todos con al menos una revisión del otro integrante y
-11 con dos— sobre 149 commits. Dos Issues de diseño precedieron a la implementación: uno fijó
-el formato del segmento y el protocolo de inserción y extracción, y el otro el registro de
-participantes, el protocolo de cierre y el formato de los registros. Ninguno de los dos se
-implementó antes de estar revisado. Las decisiones se anotaron en `docs/decisiones_diseno.md` a
-medida que se tomaban, cada entrada en el Pull Request que la implementó, no al final.
+El trabajo se organizó en **32 Issues** con criterios de aceptación explícitos, 29 de ellos
+cerrados, y **32 Pull Requests** integrados —todos con al menos una revisión del otro
+integrante y 11 con dos— sobre **164 commits**. Los Issues abiertos son los de la entrega
+(#26, #27 y #28). De los 32 Issues, 19 quedaron a cargo de Emmanuel (uno traspasado de Isaac
+durante el proyecto), 12 de Isaac y uno es conjunto.
+
+### Cómo se estructuró el trabajo
+
+Cada Issue lleva, en el cuerpo, los campos con los que se planificó y se cerró:
+
+- **Responsable** y **Esfuerzo** en puntos, para repartir carga antes de empezar.
+- **Depende de** y **Desbloquea**, que fijan el orden y evitan trabajar sobre algo todavía
+  sin revisar.
+- **Criterios de aceptación** como lista de casillas, verificables uno por uno. Los 32 Issues
+  los tienen.
+
+Dos Issues de diseño precedieron a toda implementación: el #2 fijó el formato del segmento y
+el protocolo de inserción y extracción, y el #3 el registro de participantes, el protocolo de
+cierre y el formato de los registros. Ninguno de los dos se implementó antes de estar revisado.
+
+Las revisiones no quedaron en el hilo del Pull Request: **las observaciones volvieron al Issue
+como criterios de aceptación nuevos**. El #11 (sincronización) es el ejemplo más claro: bajo el
+encabezado «Observaciones de la revisión de #29» aparecen tres criterios agregados después de
+esa revisión, entre ellos el de la cuarta variable de condición para la pausa interrumpible y
+la política de errores de las primitivas. Así la revisión de un diseño se vuelve trabajo
+rastreable en vez de un comentario que se pierde.
+
+Las decisiones se anotaron en `docs/decisiones_diseno.md` a medida que se tomaban, cada entrada
+en el Pull Request que la implementó, no al final.
+
+### Issues y Pull Requests
+
+Mapeo completo. La columna **Responsable** es quien figura en el Issue; **Integró**, quien
+abrió el Pull Request que lo cerró. Las dos difieren en el #61, que Emmanuel reportó y
+documentó e Isaac corrigió.
+
+| Issue | Título | Responsable | PR | Integró | Estado |
+|---|---|---|---|---|---|
+| #1 | Repositorio, Makefile base y README inicial | Isaac | #30 | Isaac | cerrado |
+| #2 | Diseño A: layout del segmento, protocolo put/get, headers d… | Emmanuel | #29 | Emmanuel | cerrado |
+| #3 | Diseño B: registro de participantes, protocolo de cierre, f… | Isaac | #32 | Isaac | cerrado |
+| #4 | CLI y validación estricta de argumentos | Isaac | #38 | Isaac | cerrado |
+| #5 | RNG y pausa exponencial | Emmanuel | #34 | Emmanuel | cerrado |
+| #6 | Logger CSV: captura bajo protección, escritura fuera de la… | Isaac | #39 | Isaac | cerrado |
+| #7 | Verificador automatizado de CSV | Emmanuel | #37 | Emmanuel | cerrado |
+| #8 | Métricas: media, percentil 95, throughput, histograma de es… | Emmanuel | #35 | Emmanuel | cerrado |
+| #9 | Módulo de memoria compartida y ejecutable creator | Isaac | #36 | Isaac | cerrado |
+| #10 | Buffer circular puro (sin sincronización) | Emmanuel | #33 | Emmanuel | cerrado |
+| #11 | Sincronización: put/get bloqueantes entre procesos | Emmanuel | #40 | Emmanuel | cerrado |
+| #12 | Registro de participantes | Isaac | #41 | Isaac | cerrado |
+| #13 | Pausa interrumpible por el cierre | Emmanuel | #42 | Emmanuel | cerrado |
+| #14 | Ejecutable producer | Emmanuel | #47 | Emmanuel | cerrado |
+| #15 | Ejecutable consumer | Isaac | #46 | Isaac | cerrado |
+| #16 | Finisher I: precondición, finalizador único, corte a CLOSING | Emmanuel | #43 | Emmanuel | cerrado |
+| #17 | Finisher II: espera de retiradas, liberación y recreación | Isaac | #49 | Isaac | cerrado |
+| #18 | Resumen final del finisher | Emmanuel | #52 | Emmanuel | cerrado |
+| #19 | make test: casos Validación y Aislamiento/reutilización | Isaac | #57 | Isaac | cerrado |
+| #20 | Pruebas: FIFO básico, concurrencia, capacidad mínima, estrés | Emmanuel | #55 | Emmanuel | cerrado |
+| #21 | Pruebas: buffer lleno y buffer vacío | Emmanuel | #48 | Emmanuel | cerrado |
+| #22 | Pruebas de cierre y carreras de ciclo de vida | Isaac | #58, #59 | Emmanuel, Isaac | cerrado |
+| #23 | AddressSanitizer y UndefinedBehaviorSanitizer sobre todos l… | Emmanuel | #62 | Emmanuel | cerrado |
+| #24 | Script del experimento (3 capacidades × 3 escenarios × 5 re… | Emmanuel | #51 | Emmanuel | cerrado |
+| #25 | Análisis del experimento: gráficas y resultados | Emmanuel | #60 | Emmanuel | cerrado |
+| #26 | Informe: arquitectura, pseudocódigo y tabla de pruebas | Isaac | #63, #65 | Isaac | abierto |
+| #27 | Informe: análisis de Dijkstra, Birrell y discusión de decis… | Emmanuel | #64 | Emmanuel | abierto |
+| #28 | Entrega: README final, etiqueta p2-entrega, zip y ensayo de… | Ambos | — | — | abierto |
+| #44 | Módulo de payload verificable (fill + checksum FNV-1a) | Emmanuel | #45 | Emmanuel | cerrado |
+| #50 | Pruebas pendientes del cierre: ciclo while, transición a CL… | Emmanuel | #56 | Emmanuel | cerrado |
+| #53 | Verificación final contra el enunciado: escritura fuera de… | Isaac | #54 | Isaac | cerrado |
+| #61 | La nota de `lock_acquire` en el resumen declara una combina… | Emmanuel | #66 | Isaac | cerrado |
+
+El #22 tiene dos Pull Requests porque el primero se integró contra la rama equivocada y hubo
+que rehacerlo contra `main`; el detalle está más abajo. El esqueleto del informe y sus
+secciones II–IV entraron por dos Pull Requests sobre el mismo Issue #26.
 
 ### Responsabilidades
 
@@ -279,20 +346,21 @@ verificación final del código contra el enunciado.
 En el informe, las secciones de arquitectura, protocolo y pruebas son de Isaac, y las de
 resultados, lecturas y decisiones de Emmanuel; el resto es conjunto.
 
-### Issues, ramas y revisiones
+### Ramas, revisiones y reglas del flujo
 
 Cada cambio entró por una rama con nombre derivado de su Issue y un Pull Request que declara la
 validación ejecutada y queda a revisión del otro integrante. Los commits pertenecen a quien
 hizo el trabajo; no se reescribió historia compartida, no se sustituyó el repositorio al final
 y ningún cambio entró como un único commit.
 
-Las revisiones no fueron de forma. Una encontró que la fila `lock_acquire` del resumen
-declaraba incluir la readquisición del mutex al despertar de la espera, cuando el tiempo de
-bloqueo se mide una sola vez alrededor de la toma inicial y esa readquisición queda
-contabilizada en el tiempo de espera. Los datos lo confirmaron —la nota implicaba unos 60 µs y
-lo medido son 0.89 a 1.74 µs— y se corrigió la nota junto con la prueba que la aseveraba
-(#61). Lo detectó el cruce de la documentación con el código, no una prueba, que habría pasado
-igual.
+Las revisiones no fueron de forma. Dos ejemplos, de dos clases distintas.
+
+Una encontró que la fila `lock_acquire` del resumen declaraba incluir la readquisición del
+mutex al despertar de la espera, cuando el tiempo de bloqueo se mide una sola vez alrededor de
+la toma inicial y esa readquisición queda contabilizada en el tiempo de espera. Los datos lo
+confirmaron —la nota implicaba unos 60 µs y lo medido son 0.89 a 1.74 µs— y se corrigió la nota
+junto con la prueba que la aseveraba (#61). Lo detectó el cruce de la documentación con el
+código, no una prueba, que habría pasado igual.
 
 Otra encontró un error que no producía ninguna falla visible. La pausa simulada del productor
 se implementó como espera con plazo, y el plazo se calculaba contra `CLOCK_MONOTONIC` mientras
@@ -303,9 +371,9 @@ código del fin normal de la pausa. Las dos decisiones cuelgan ahora del mismo m
 puedan desalinearse.
 
 Dos incidentes del flujo quedaron en el historial en vez de borrarse: un Pull Request integrado
-contra la rama equivocada, que dejó su trabajo fuera de `main` y hubo que rehacerlo contra
-ella, y una colisión de numeración en la bitácora cuando dos ramas reclamaron la misma entrada
-a la vez.
+contra la rama equivocada, que dejó su trabajo fuera de `main` y hubo que rehacerlo contra ella
+(#22, Pull Requests #58 y #59), y una colisión de numeración en la bitácora cuando dos ramas
+reclamaron la misma entrada a la vez.
 
 ## Versión entregada
 
