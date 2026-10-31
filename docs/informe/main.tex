@@ -83,22 +83,16 @@ Sincronización, Cierre Ordenado y Evaluación Experimental}
 \begin{abstract}
 Se implementa un buffer acotado compartido entre procesos con espacios de
 direcciones independientes, sobre memoria compartida POSIX. El protocolo usa
-un mutex y cuatro variables de condición que viven dentro del segmento,
-configurados para compartirse entre procesos, con el predicado de espera de
-cada condición declarado y con la escritura de registros fuera de la región
-crítica. El cierre es ordenado: un finalizador único corta la admisión
-mediante una puerta con contador de referencias, drena lo pendiente, espera
-a que todos se retiren y recién entonces destruye las primitivas y libera el
-nombre. La verificación combina 205 casos automáticos bajo AddressSanitizer
-y UndefinedBehaviorSanitizer con un oráculo que cruza los registros de todos
-los procesos y comprueba conservación, unicidad, integridad del contenido y
-orden FIFO. Un experimento de 45 corridas ---tres capacidades por tres
-relaciones de tasas por cinco repeticiones--- muestra que aumentar la
-capacidad del buffer no es una mejora sino un intercambio: eleva el caudal
-solo cuando ninguno de los dos lados es el cuello de botella, un 18~\%
-entre capacidad~1 y~64 con tasas equilibradas, mientras la latencia sube
-siempre, hasta un factor de 66. En régimen saturado la latencia deja de
-medir el protocolo y se vuelve la capacidad dividida por la tasa de drenaje.
+un mutex y cuatro variables de condición alojadas en el segmento, con el
+predicado de espera de cada una declarado, y un cierre ordenado en el que un
+finalizador único corta la admisión, drena lo pendiente, espera las retiradas
+y recién entonces libera los recursos. La verificación combina las pruebas
+mínimas del enunciado, bajo AddressSanitizer y UndefinedBehaviorSanitizer,
+con un oráculo que cruza los registros de todos los procesos y comprueba
+conservación, unicidad, integridad y orden FIFO. Un experimento de 45
+corridas muestra que aumentar la capacidad del buffer no es una mejora sino
+un intercambio: eleva el caudal solo cuando ningún lado es el cuello de
+botella, mientras la latencia sube siempre, hasta un factor de 66.
 \end{abstract}
 
 \begin{IEEEkeywords}

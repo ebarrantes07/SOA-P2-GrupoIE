@@ -3,15 +3,15 @@
 
 \subsection{Entorno y forma de las pruebas}
 
-\code{make test} corre 205 casos y falla ante cualquier error: 24 son las
-pruebas mínimas del enunciado (Tabla~\ref{tab:pruebas}) y el resto se
-agregó durante el desarrollo. Cada prueba tiene un tiempo límite para que un
+\code{make test} corre las 24 pruebas que cubren los casos mínimos del
+enunciado (Tabla~\ref{tab:pruebas}) junto con las que se agregaron por
+módulo durante el desarrollo, y falla ante cualquier error. Cada prueba tiene un tiempo límite para que un
 bloqueo indefinido se reporte como falla en vez de colgar la suite; ningún
 proceso del sistema termina por tiempo, sino por el protocolo de cierre.
 
 La corrida de referencia se hizo en un contenedor Ubuntu~24.04 (Linux
 x86-64, GCC~13.3.0, glibc~2.39) con las banderas \code{-std=c17 -Wall
--Wextra -Wpedantic -Werror -pthread}. El resultado fue 205/205 en unos
+-Wextra -Wpedantic -Werror -pthread}. La suite pasa completa en unos
 13~s.
 
 % La tabla de ancho completo se define acá para que LaTeX la ubique al
@@ -146,8 +146,8 @@ resultado; en conjunto, los casos sostienen cuatro propiedades:
 \code{make test-san} compila y corre la suite completa con
 AddressSanitizer y UndefinedBehaviorSanitizer
 (\code{-fsanitize=address,undefined}), configurados para que cualquier
-reporte haga fallar la corrida. Resultado: 205/205 casos sin reportes de
-ASan, UBSan ni LeakSanitizer, incluido el caso de estrés.
+reporte haga fallar la corrida. Resultado: la suite completa pasa sin
+reportes de ASan, UBSan ni LeakSanitizer, incluido el caso de estrés.
 
 Dos detalles del montaje hacen que ese cero signifique algo. El objetivo
 limpia antes y después en vez de convivir con la compilación normal: los
