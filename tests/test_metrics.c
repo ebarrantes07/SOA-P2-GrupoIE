@@ -306,7 +306,16 @@ static bool test_summary_participant_rows(void) {
     /* La espera del consumidor se declara combinada: tercer criterio del
      * #18. */
     CHECK(strstr(find_row(&s, "wait_data", "consumer", 21)->note, "espera final") != NULL);
-    CHECK(strstr(find_row(&s, "lock_acquire", "producer", 11)->note, "readquisicion") != NULL);
+
+    /* La readquisicion tras cond_wait se declara en la metrica de espera
+     * de cada rol, y lock_acquire remite a esa misma fila (#61). Que la
+     * afirmacion sea cierta lo comprueba put_blocks_and_counts_the_wait en
+     * test_sync.c midiendo; aca se verifica que cada rol apunte a la fila
+     * que de verdad tiene. */
+    CHECK(strstr(find_row(&s, "wait_space", "producer", 11)->note, "readquisicion") != NULL);
+    CHECK(strstr(find_row(&s, "wait_data", "consumer", 21)->note, "readquisicion") != NULL);
+    CHECK(strstr(find_row(&s, "lock_acquire", "producer", 11)->note, "wait_space") != NULL);
+    CHECK(strstr(find_row(&s, "lock_acquire", "consumer", 21)->note, "wait_data") != NULL);
 
     CHECK(find_row(&s, "wait_count", "producer", 11)->value == 5.0);
     CHECK(find_row(&s, "lock_acquire", "producer", 11)->value == 900.0);
