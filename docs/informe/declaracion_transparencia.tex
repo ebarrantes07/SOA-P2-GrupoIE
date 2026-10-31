@@ -1,6 +1,32 @@
 \section*{Declaración de Transparencia, Uso de IA y Material Reutilizado}
 
-\pendiente{Ambos, como en el P1: uso de Claude Code como herramienta
-auxiliar y verificación del contenido contra el código y las corridas
-reales. Material reutilizado y su licencia: FNV-1a (dominio público),
-\texttt{xorshift32}~\cite{Marsaglia2003}, plantilla \texttt{IEEEtran}.}
+\textbf{Uso de inteligencia artificial.} Se usó Claude Code (Anthropic) como
+herramienta auxiliar en tres tareas: redactar en español a partir de las
+decisiones y los hallazgos que el equipo ya había registrado en la bitácora
+y en los \emph{Issues}; construir el pseudocódigo, las figuras y las tablas
+a partir del código fuente y de los datos del experimento; y revisar
+formato y ortografía. No se usó para decidir el diseño ni para producir
+afirmaciones técnicas sin comprobar.
+
+\textbf{Todo el contenido técnico se verificó contra el código y contra
+corridas reales antes de incluirse.} Los valores de las tablas del
+experimento salen de los resúmenes versionados en el repositorio; los
+predicados de espera, los puntos de efecto y los tamaños del segmento se
+cotejaron con los archivos fuente; y las cifras de las pruebas provienen de
+ejecuciones de la suite. Ese cotejo encontró errores en borradores de este
+mismo informe ---entre ellos una afirmación sobre el cierre ante caídas que
+el código contradecía--- y se corrigieron antes de la entrega.
+
+\textbf{Material reutilizado.} El generador pseudoaleatorio
+\code{xorshift32} de \code{src/rng.c} se reutiliza del Proyecto~1 del mismo
+grupo, trabajo propio de los dos integrantes y por lo tanto sin
+restricciones de terceros; la secuencia es la publicada por
+Marsaglia~\cite{Marsaglia2003}. Lo nuevo acá es el muestreo exponencial por
+transformada inversa. El checksum del payload implementa FNV-1a desde su
+especificación~\cite{FNV}, cuyos autores la publicaron en el dominio
+público, sin copiar código de terceros. El informe usa la plantilla
+\code{IEEEtran}, bajo su propia licencia de uso académico. Los scripts de
+análisis usan solo la biblioteca estándar de Python.
+
+El resto del código, el pseudocódigo, las figuras y los datos
+experimentales son originales de este proyecto.

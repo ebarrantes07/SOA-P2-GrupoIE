@@ -1,4 +1,72 @@
 \section{Introducción}
 \label{sec:introduccion}
 
-\pendiente{ambos: Problema (buffer acotado de Dijkstra entre procesos independientes con memoria compartida POSIX), objetivos del enunciado, alcance (una máquina GNU/Linux, sin recuperación ante caídas) y contribuciones. Cerrar con un párrafo que recorra las secciones.}
+El problema del buffer acotado está resuelto desde que Dijkstra lo planteó
+con semáforos~\cite{Dijkstra1965}. Lo que cambia cuando los participantes
+son \emph{procesos} con espacios de direcciones independientes, y no hilos
+de un mismo programa, es casi todo lo que lo rodea: el estado compartido
+tiene que vivir en un objeto con nombre que sobrevive a cada participante,
+las primitivas de sincronización pasan a ser datos dentro de ese objeto en
+vez de servicios del lenguaje, ninguna dirección virtual vale en otro
+proceso, y nadie libera los recursos cuando un proceso termina. Birrell
+describe el modelo de hilos del que se parte y menciona esta alternativa
+solo para advertir que es más costosa~\cite{Birrell1989}.
+
+Este proyecto implementa ese sistema sobre memoria compartida POSIX. Un
+\code{creator} crea una instancia con nombre y capacidad; productores y
+consumidores independientes se conectan, se registran, trabajan y se
+retiran; un \code{finisher} ejecuta un cierre ordenado que drena lo
+pendiente, espera a que todos se retiren y libera los recursos. Un quinto
+ejecutable, \code{verify}, cruza los registros de todos los procesos y actúa
+como oráculo de corrección.
+
+\subsection{Objetivos}
+
+Los del enunciado: implementar la comunicación entre procesos de espacios
+independientes; diseñar y justificar un protocolo de sincronización que
+preserve integridad, exclusión y progreso; garantizar extracción FIFO, sin
+pérdidas ni duplicaciones, y terminación correcta; evaluar cómo la capacidad
+del buffer y las tasas de producción y consumo afectan caudal, latencia y
+bloqueo; y relacionar la implementación con las lecturas, argumentando sus
+decisiones y sus límites.
+
+\subsection{Alcance}
+
+La ejecución ocurre en una sola máquina GNU/Linux. No hay red, ni memoria
+compartida distribuida, ni persistencia de mensajes, ni interfaz gráfica. No
+se cubre la caída arbitraria de un proceso: las garantías se aplican a
+participantes que siguen el protocolo y a un cierre normal. Esa frontera no
+es una omisión cómoda, y la sección~\ref{sec:pruebas} documenta qué ocurre
+exactamente cuando se cruza.
+
+\subsection{Contribuciones}
+
+\begin{itemize}
+\item Un protocolo con un mutex y cuatro variables de condición compartidos
+      entre procesos, con el predicado de espera de cada uno declarado y
+      verificado contra el código (sección~\ref{sec:protocolo}).
+\item Un cierre ordenado con finalizador único, construido sobre una puerta
+      de conexión con contador de referencias que cierra la entrada sin
+      bloquear a quien ya está dentro.
+\item Verificación en dos niveles: 205 casos automáticos, de los cuales 24
+      cubren las pruebas mínimas del enunciado, y un oráculo que comprueba
+      conservación, unicidad, integridad del contenido y orden FIFO sobre
+      los registros de cada corrida (sección~\ref{sec:pruebas}).
+\item Un experimento de 45 corridas que cuantifica el intercambio entre
+      caudal y latencia, y un modelo de simulación que separa qué parte de
+      los números viene del régimen del escenario y qué parte de la
+      implementación (sección~\ref{sec:resultados}).
+\end{itemize}
+
+\subsection{Organización}
+
+La sección~\ref{sec:arquitectura} describe el segmento compartido y qué dato
+es privado de cada proceso. La sección~\ref{sec:protocolo} da el
+pseudocódigo del registro, la inserción, la extracción y el cierre, con sus
+invariantes y sus puntos de efecto. La sección~\ref{sec:pruebas} presenta la
+tabla de pruebas mínimas, el oráculo y lo que los sanitizers no demuestran.
+La sección~\ref{sec:resultados} reporta el experimento. La
+sección~\ref{sec:lecturas} relaciona el diseño con Dijkstra y Birrell, y la
+sección~\ref{sec:decisiones} discute cinco decisiones donde había una
+alternativa razonable que se descartó con evidencia. La
+sección~\ref{sec:gestion} documenta la trazabilidad del trabajo.
