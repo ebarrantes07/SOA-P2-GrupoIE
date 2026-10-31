@@ -1,19 +1,24 @@
 \section{Relación con las lecturas}
 \label{sec:lecturas}
 
+Las dos lecturas están en inglés. Las citas van traducidas; cuando la frase
+citada es además el nombre por el que hay que buscarla en la fuente, el
+original va entre paréntesis.
+
 \subsection{Dijkstra: permisos, capacidad y orden}
 
 Dijkstra introduce los semáforos y las operaciones \code{P} y \code{V} en la
 sección~3.2 de \emph{Cooperating Sequential Processes}~\cite{Dijkstra1965},
 donde define \code{P} como la operación que decrementa su semáforo
-\emph{«as soon as the resulting value would be non-negative»}, y distingue
+\emph{«tan pronto como el valor resultante sea no negativo»}, y distingue
 entre semáforos binarios y generales. La sección~3.3 los aplica al problema
 de exclusión mutua con un semáforo binario, y la sección~4.3 construye el
 buffer acotado con dos semáforos generales: el de porciones encoladas que
-ya aparecía en la sección~4.1 (\emph{«number of queuing portions»}) y el que
-agrega el caso acotado para el espacio libre (\emph{«number of empty
-positions»}). La simetría la resume en una frase: \emph{«the consumer produces
-and the producer consumes empty positions in the buffer»}.
+ya aparecía en la sección~4.1 ---«número de porciones en cola»,
+\emph{number of queuing portions}--- y el que agrega el caso acotado para el
+espacio libre ---«número de posiciones vacías», \emph{number of empty
+positions}---. La simetría la resume en una frase: \emph{«el consumidor
+produce y el productor consume posiciones vacías en el buffer»}.
 
 Esa formulación trata la capacidad como un \emph{stock de permisos}. Las
 posiciones vacías no son un número que se consulta, son fichas que se
@@ -30,17 +35,18 @@ en vez de sobre semáforos.
 
 Dijkstra también muestra, en la sección~4.1, que el buffer acotado con
 varios productores o varios consumidores necesita \emph{además} un semáforo
-binario de exclusión, que él llama \emph{«buffer manipulation»}: los dos
-contadores regulan la disponibilidad, pero no impiden que dos productores
+binario de exclusión, que él llama «manipulación del buffer»
+(\emph{buffer manipulation}): los dos contadores regulan la disponibilidad,
+pero no impiden que dos productores
 se mezclen al escribir. Es la misma separación de responsabilidades que
 nuestro diseño hace explícita con un mutex y cuatro variables de condición:
 los contadores dicen \emph{cuándo} se puede, el mutex dice \emph{quién} está
 adentro.
 
 Y advierte que el orden importa. En la sección~4.1 pide al lector
-convencerse de que \emph{«the order of the two V-operations in the producer
-is immaterial»} pero \emph{«the order of the two P-operations in the
-consumer is essential»}. Dijkstra no explica por qué, pero la razón es la
+convencerse de que \emph{«el orden de las dos operaciones V en el productor
+es indiferente»} pero \emph{«el orden de las dos operaciones P en el
+consumidor es esencial»}. Dijkstra no explica por qué, pero la razón es la
 que hace interesante la comparación con nuestro mecanismo: si el consumidor
 tomara primero el semáforo de exclusión y después el de datos, se quedaría
 dormido esperando datos \emph{con la exclusión en la mano}, y ningún
@@ -61,12 +67,13 @@ proyecto no reimplementa el buffer con semáforos.
 
 El informe de Birrell~\cite{Birrell1989} no numera sus secciones, así que se
 citan por título. La separación entre exclusión y coordinación está ya en
-los títulos de las dos secciones centrales: \emph{«Using a Mutex: accessing
-shared data»} y \emph{«Using a Condition variable: scheduling shared
-resources»}. El mutex es para acceder a datos compartidos; la variable de
-condición es para \emph{planificar} el acceso a un recurso. Son dos
-problemas distintos con dos herramientas distintas, que es la misma
-distinción que el enunciado pide mantener y que nuestro diseño implementa al
+los títulos de las dos secciones centrales: «Uso de un mutex: acceder a
+datos compartidos» (\emph{Using a Mutex: accessing shared data}) y «Uso de
+una variable de condición: planificar recursos compartidos»
+(\emph{Using a Condition variable: scheduling shared resources}). Acceder y
+\emph{planificar} el acceso son dos problemas distintos con dos herramientas
+distintas, que es la misma distinción que el enunciado pide mantener y que
+nuestro diseño implementa al
 concentrar en \code{sync.c} la única capa que toca mutex y condvars
 (sección~\ref{sec:protocolo}).
 
@@ -76,10 +83,10 @@ Sobre el predicado, Birrell recomienda un patrón y lo escribe así:
 \code{WHILE NOT expression DO Thread.Wait(m,c) END;}
 \end{quote}
 
-y lo llama \emph{«a general pattern, which I strongly recommend for all your
-uses of condition variables»}. Da dos razones. La primera es que
-\emph{«the semantics of ``Signal'' do not guarantee that the awoken thread
-will be the next to lock the mutex»}: otro consumidor puede interponerse,
+y lo llama \emph{«un patrón general, que recomiendo enfáticamente para todos
+sus usos de variables de condición»}. Da dos razones. La primera es que
+\emph{«la semántica de \code{Signal} no garantiza que el hilo despertado sea
+el siguiente en tomar el mutex»}: otro consumidor puede interponerse,
 tomar el mutex, vaciar el recurso y soltarlo antes de que el despertado
 llegue a correr. La segunda es que su implementación permite que
 \code{Signal} despierte, raramente, a más de un hilo.
@@ -94,17 +101,19 @@ y nuestra readquisicion del mutex. */}
 \end{quote}
 
 Birrell agrega el argumento que más vale para un trabajo que se revisa de a
-dos: el patrón permite \emph{«verify correctness by local inspection, which
-is always preferable to global inspection»}. Con el \code{while}, leer las
+dos: el patrón permite \emph{«verificar la corrección por inspección local,
+que siempre es preferible a la inspección global»}. Con el \code{while},
+leer las
 cinco líneas de \code{sync\_get} basta para saber que al salir del ciclo hay
 un mensaje; con un \code{if} habría que auditar todos los puntos que
 señalizan la condvar.
 
 De ahí se sigue su política de señalización, en la subsección
-\emph{«Using ``Broadcast''»}: \code{Signal} sirve \emph{«if you know that at
-most one thread can usefully be awoken»}, y \code{Broadcast} cuando
-\emph{«you really need to awaken multiple threads, because the resource you
-have just made available can be used by multiple other threads»}. Es
+«Uso de \code{Broadcast}» (\emph{Using ``Broadcast''}): \code{Signal} sirve
+\emph{«si uno sabe que a lo sumo un hilo puede despertarse con provecho»}, y
+\code{Broadcast} cuando \emph{«uno realmente necesita despertar varios
+hilos, porque el recurso que acaba de poner disponible puede ser usado por
+varios otros hilos»}. Es
 literalmente el criterio de nuestro protocolo (sección~\ref{sec:protocolo}):
 una inserción libera un dato y despierta con \code{signal} a un consumidor;
 una extracción libera una casilla y despierta a un productor; el corte a
@@ -112,8 +121,8 @@ una extracción libera una casilla y despierta a un productor; el corte a
 así que va \code{broadcast} sobre las cuatro condvars.
 
 En un punto nos apartamos de él a propósito. Birrell observa que
-\code{Broadcast} \emph{«allows you to be less careful about separating
-different wait reasons into different condition variables»}. Nosotros
+\code{Broadcast} \emph{«permite ser menos cuidadoso al separar distintas
+razones de espera en distintas variables de condición»}. Nosotros
 elegimos lo contrario: separar las causas de espera en cuatro condvars
 (\code{not\_full}, \code{not\_empty}, \code{closing}, \code{all\_left}) y
 usar \code{signal} donde alcanza. El motivo es que la pausa simulada del
@@ -126,11 +135,12 @@ participante para justificarlo (sección~\ref{sec:resultados}).
 \subsection{Lo que el modelo de Birrell no cubre}
 
 Birrell escribe sobre hilos en un espacio de direcciones único, y menciona
-la alternativa solo para descartarla: \emph{«multiple separate processes,
-running in separate address spaces. This tends to be expensive to set up,
-and the costs of communicating between address spaces are often high, even
-in the presence of shared segments»}. Ese «even in the presence of shared
-segments» describe exactamente la arquitectura que el enunciado exige, así
+la alternativa solo para descartarla: \emph{«múltiples procesos separados,
+corriendo en espacios de direcciones separados. Esto suele ser costoso de
+montar, y los costos de comunicar entre espacios de direcciones son con
+frecuencia altos, incluso en presencia de segmentos compartidos»}. Ese
+«incluso en presencia de segmentos compartidos» describe exactamente la
+arquitectura que el enunciado exige, así
 que varias comodidades de su modelo no se heredan:
 
 \begin{itemize}
