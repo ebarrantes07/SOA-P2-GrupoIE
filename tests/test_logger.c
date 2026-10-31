@@ -9,8 +9,10 @@
 #include "verify.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* El logger escribe lo que el verificador (#7) lee: si una de estas
@@ -287,7 +289,109 @@ static bool test_open_failure(void) {
     return true;
 }
 
+/* Un segundo proceso que abre el MISMO archivo mientras otro lo escribe
+ * recibe -EBUSY y no lo trunca: antes fopen("w") le vaciaba el CSV al
+ * proceso en curso (#19). Hace falta otro proceso porque los candados de
+ * fcntl son por proceso. */
+static bool test_open_busy_keeps_other_file(void) {
+    const char *path = temp_path();
+    CHECK(path != NULL);
+    int ready[2], go[2];
+    CHECK(pipe(ready) == 0 && pipe(go) == 0);
+
+    pid_t pid = fork();
+    CHECK(pid != -1);
+    if (pid == 0) {
+        alarm(10);
+        close(ready[0]);
+        close(go[1]);
+        struct csv_logger lg;
+        struct csv_record r = full(CSV_PUT);
+        int ok = csv_logger_open(&lg, path, CSV_PRODUCER, 4) == 0 &&
+                 csv_logger_write(&lg, &r) == 0 && fflush(lg.f) == 0;
+        char c = ok ? 'y' : 'n';
+        (void)!write(ready[1], &c, 1);
+        (void)!read(go[0], &c, 1);          /* sostiene el candado */
+        _exit(csv_logger_close(&lg) == 0 ? 0 : 1);
+    }
+    /* El padre cierra sus copias de los extremos que no usa: si el hijo
+     * muere antes de escribir, el read ve EOF en vez de esperar para
+     * siempre (y main tiene además su alarm). */
+    close(ready[1]);
+    close(go[0]);
+    char c = 0;
+    bool child_ready = read(ready[0], &c, 1) == 1 && c == 'y';
+    char *before = child_ready ? slurp(path) : NULL;
+    if (before == NULL) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        close(ready[0]);
+        close(go[1]);
+        CHECK(child_ready);
+        CHECK(before != NULL);
+    }
+
+    struct csv_logger other;
+    int rc = csv_logger_open(&other, path, CSV_PRODUCER, 4);
+    char *after = slurp(path);
+    (void)!write(go[1], "x", 1);
+    int st;
+    waitpid(pid, &st, 0);
+    close(ready[0]);
+    close(go[1]);
+
+    bool same = after != NULL && strcmp(before, after) == 0;
+    free(before);
+    free(after);
+    CHECK(rc == -EBUSY);
+    CHECK(other.f == NULL);
+    CHECK(same);                            /* no lo trunco */
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+
+    /* Liberado el candado (el otro termino), se puede reabrir y truncar. */
+    CHECK(csv_logger_open(&other, path, CSV_PRODUCER, 4) == 0);
+    CHECK(csv_logger_close(&other) == 0);
+    char *text = slurp(path);
+    CHECK(text != NULL);
+    bool only_header = strcmp(text, CSV_HEADER "\n") == 0;
+    free(text);
+    CHECK(only_header);
+    unlink(path);
+    return true;
+}
+
+/* /dev/null no es un archivo regular: no se puede truncar ni tiene nada
+ * que proteger, y es uno solo para toda la máquina. Varios procesos a la
+ * vez tienen que poder usarlo como --log (D32): es la forma de desactivar
+ * el log que usa la medición del efecto de los logs (#25). */
+static bool test_open_dev_null_shared(void) {
+    struct csv_logger a, b;
+    CHECK(csv_logger_open(&a, "/dev/null", CSV_PRODUCER, 1) == 0);
+    /* Otro proceso con /dev/null abierto a la vez: los candados de fcntl
+     * son por proceso, así que una segunda apertura en este mismo no
+     * probaría nada. */
+    pid_t pid = fork();
+    CHECK(pid != -1);
+    if (pid == 0) {
+        alarm(10);
+        struct csv_logger c;
+        struct csv_record r = full(CSV_PUT);
+        _exit(csv_logger_open(&c, "/dev/null", CSV_PRODUCER, 2) == 0 &&
+              csv_logger_write(&c, &r) == 0 && csv_logger_close(&c) == 0 ? 0 : 1);
+    }
+    int st;
+    waitpid(pid, &st, 0);
+    CHECK(csv_logger_open(&b, "/dev/null", CSV_PRODUCER, 3) == 0);
+    struct csv_record r = full(CSV_PUT);
+    CHECK(csv_logger_write(&a, &r) == 0);
+    CHECK(csv_logger_close(&a) == 0);
+    CHECK(csv_logger_close(&b) == 0);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    return true;
+}
+
 int main(void) {
+    alarm(30);   /* las pruebas con fork no pueden colgar make test */
     struct test_case tests[] = {
         {"rows_follow_d12", test_rows_follow_d12},
         {"every_row_has_13_columns", test_every_row_has_13_columns},
@@ -299,6 +403,8 @@ int main(void) {
         {"write_n_events", test_write_n_events},
         {"wrong_event_writes_nothing", test_wrong_event_writes_nothing},
         {"open_failure", test_open_failure},
+        {"open_busy_keeps_other_file", test_open_busy_keeps_other_file},
+        {"open_dev_null_shared", test_open_dev_null_shared},
     };
     int failed = test_util_run(tests, sizeof(tests) / sizeof(tests[0]));
     return failed ? 1 : 0;

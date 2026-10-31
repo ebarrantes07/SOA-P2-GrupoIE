@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     if (j.has_log) {
         int rc = csv_logger_open(&j.lg, opt.log_path, CSV_FINISHER, 0);
         if (rc != 0) {
-            fprintf(stderr, "finisher: no se pudo abrir %s: %s\n", opt.log_path, strerror(-rc));
+            fprintf(stderr, "finisher: no se pudo abrir %s: %s\n", opt.log_path, csv_logger_open_str(rc));
             return EXIT_FAILURE;
         }
     }
