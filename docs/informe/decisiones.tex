@@ -1,4 +1,131 @@
 \section{Discusión de decisiones de diseño}
 \label{sec:decisiones}
 
-\pendiente{Emmanuel, \#27: Al menos tres: tamaño del buffer, costo de los logs, granularidad del bloqueo, mecanismo de espera, equidad o complejidad del cierre. Cada una con la alternativa descartada y la evidencia (resultados o pruebas).}
+Las decisiones de este proyecto están registradas una por una en la bitácora
+\code{docs/decisiones\_diseno.md} (35 entradas, D1 a D35). Esta sección
+discute cuatro donde había una alternativa razonable que se descartó con
+evidencia y no por preferencia.
+
+\subsection{Tamaño del buffer: se mide, no se elige grande}
+
+\textbf{Decisión.} La capacidad es un parámetro de la instancia
+(\code{--capacity}) y el experimento la barre en 1, 8 y 64 en vez de fijar
+un valor «suficientemente grande».
+
+\textbf{Alternativa descartada.} Elegir una capacidad holgada de entrada,
+con el argumento intuitivo de que más espacio nunca estorba.
+
+\textbf{Evidencia.} Estorba, y se puede cuantificar
+(sección~\ref{sec:resultados}). Subir la capacidad solo mejora el
+rendimiento cuando ninguno de los dos lados es el cuello de botella: con
+pausas 5/5~ms el throughput pasa de 611 a 722~msgs/s (+18\,\%), pero con
+pausas 2/8~ms se queda plano (488, 492, 473) porque el consumidor ya corre
+al 98\,\% de su techo con una sola casilla. Lo que la capacidad sí cambia
+siempre es la latencia: en 2/8~ms la media pasa de 1.95 a 128.05~ms, un
+factor de 66. Y en régimen saturado esa latencia no es una medición sino una
+división: con el buffer lleno al 94--98\,\% de su capacidad --- recuperado
+por la ley de Little~\cite{Little1961} --- un mensaje tarda
+\emph{capacidad / tasa de drenaje}, lo que predice 2.05, 16.25 y 135.26~ms
+contra los tres valores medidos.
+
+El mecanismo es que un proceso solo puede bloquearse cuando el buffer está
+en un borde: con capacidad~1 la zona intermedia no existe (los únicos
+niveles posibles son 0 y 1, y 1 \emph{es} el estado lleno), y con
+capacidad~64 el nivel pasa el 81.8\,\% del tiempo donde nadie puede
+bloquearse. El buffer no acelera a nadie, absorbe varianza, y solo hay
+varianza que absorber si los dos lados están balanceados.
+
+\textbf{Consecuencia práctica.} Elegir la capacidad es elegir un punto en un
+intercambio entre caudal y latencia, no una mejora gratuita. El modelo de
+referencia (D33) muestra además que el beneficio satura en seco: de
+capacidad~128 en adelante el throughput no gana nada, así que 64 ya estaba
+en el plateau.
+
+\subsection{Costo de los logs: medido antes de confiar en las mediciones}
+
+\textbf{Decisión.} Cada proceso escribe su propio CSV, los campos del evento
+se capturan bajo el mutex y la escritura ocurre \emph{afuera} de la región
+crítica (D3, D12).
+
+\textbf{Alternativa descartada.} Escribir desde la región crítica, que es
+más simple porque no hace falta la estructura intermedia; o un archivo de
+log común a todos los procesos, que ahorra el cruce posterior.
+
+\textbf{Evidencia.} La instrumentación podría contaminar justo lo que mide,
+así que se midió con un A/B: la misma corrida con los CSV en un archivo y
+con los CSV a \code{/dev/null}, siete repeticiones por celda. En el régimen
+del experimento (pausas 5/5~ms) la diferencia es de 0.4 errores estándar,
+o sea \textbf{no medible}: la pausa de 5~ms por mensaje domina por tres
+órdenes de magnitud sobre escribir unos 200~bytes. El costo existe y se ve
+solo cuando se quitan las pausas: ahí vale 0.53~\textmu s de tiempo de pared
+por mensaje, un 6\,\% de la tasa máxima.
+
+Las dos decisiones de diseño explican por qué es tan bajo, y las dos son
+anteriores a la medición: escribir fuera del mutex evita que una llamada al
+sistema lenta serialice el buffer, y un archivo por proceso evita contención
+entre ellos. El alcance del A/B queda declarado: con \code{/dev/null} el
+logger sigue formateando cada fila, así que aísla la escritura al archivo y
+no la instrumentación entera.
+
+\subsection{Mecanismo de espera: una condvar por causa}
+
+\textbf{Decisión.} Cuatro variables de condición ---\code{not\_full},
+\code{not\_empty}, \code{closing} y \code{all\_left}--- y la pausa simulada
+del productor implementada como espera con plazo sobre \code{closing}
+(D3, D20).
+
+\textbf{Alternativa descartada.} Dormir la pausa con \code{nanosleep}, que
+es lo obvio para «esperar \code{N} milisegundos»; y, una vez elegida la
+condvar, reusar \code{not\_full} en vez de agregar una cuarta.
+
+\textbf{Evidencia.} Las dos alternativas fallan por razones distintas y
+concretas. Un \code{nanosleep} no se interrumpe: un productor en pausa de
+300~ms no se enteraría del corte hasta terminarla, y el cierre tendría que
+esperarlo. Con \code{pthread\_cond\_timedwait} sobre \code{closing}, el
+\code{broadcast} del corte lo despierta de inmediato y se retira sin
+insertar.
+
+Reusar \code{not\_full} es peor de lo que parece: el que duerme su pausa ahí
+\emph{roba} un \code{signal} destinado a un productor que de verdad está
+bloqueado por falta de espacio, y ese productor queda dormido una vuelta más
+sin motivo. Es exactamente el caso donde Birrell recomienda separar causas
+de espera (sección~\ref{sec:lecturas}).
+
+La misma entrada D20 registra un error que esta decisión hizo visible y que
+vale como advertencia: \code{pthread\_cond\_timedwait} compara el plazo
+contra el reloj con que se configuró la condvar, así que mezclar
+\code{CLOCK\_MONOTONIC} en el plazo con el reloj por omisión en la condvar
+le pasa un instante de los años setenta y devuelve \code{ETIMEDOUT} de
+inmediato. La pausa desaparecía sin un solo error ---medido: 0~ms en vez de
+300--- porque \code{ETIMEDOUT} es justamente el código del fin normal. Las
+dos decisiones cuelgan del mismo macro para que no puedan desalinearse.
+
+\subsection{Granularidad del bloqueo: un solo mutex, y la evidencia de que alcanza}
+
+\textbf{Decisión.} Un mutex por instancia, que protege el anillo, los
+contadores, las tablas de participantes y las métricas. \code{buffer.h}
+asume que ya está tomado (D2).
+
+\textbf{Alternativa descartada.} Bloqueo más fino ---un candado para el
+anillo y otro para las métricas, o secciones críticas separadas por
+campo--- con el argumento de reducir contención.
+
+\textbf{Evidencia.} La contención no es el costo, así que el bloqueo fino
+optimizaría lo que no duele. Adquirir el mutex cuesta menos de
+1~\textmu s por operación en casi todas las celdas (0.24--0.63~\textmu s los
+productores, 0.35--1.7~\textmu s los consumidores), entre tres y cuatro
+órdenes de magnitud por debajo de las pausas y de las esperas por la
+contraparte. Dividir el mutex habría multiplicado los estados posibles y los
+órdenes de adquisición ---con el riesgo de interbloqueo que eso trae, el
+mismo que Dijkstra señala para el orden de las operaciones--- a cambio de un
+microsegundo.
+
+Lo que sí es caro quedó identificado al analizar los resultados, y no es el
+candado: despertar a un proceso dormido cuesta unos 60~\textmu s en este
+entorno (\code{cond\_signal}, el despacho del planificador y la
+readquisición del mutex), dos órdenes de magnitud más que tomar el mutex sin
+contención. En el escenario 8/2~ms, donde el consumidor se bloquea en 197 de
+cada 200 extracciones, eso es lo que domina la latencia media por mensaje.
+La conclusión para el diseño es la inversa de la intuición: conviene
+preocuparse por \emph{cuántas veces se duerme un proceso}, no por cuánto
+dura la sección crítica.

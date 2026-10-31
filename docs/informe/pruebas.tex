@@ -1,4 +1,70 @@
 \section{Pruebas y verificación}
 \label{sec:pruebas}
 
-\pendiente{Isaac, \#26: Tabla de los 13 casos mínimos (comando, esperado, obtenido, conclusión) a partir de \code{tabla\_pruebas.md}. Verificación automática de mensajes con \code{verify} (D16). Mutaciones detectadas. Sanitizers (\code{make test-san}) y la nota de lo que no demuestran (criterio 3 del \#23, D35). Limitaciones del entorno.}
+\pendiente{Isaac, \#26: Tabla de los 13 casos mínimos (comando, esperado, obtenido, conclusión) a partir de \code{tabla\_pruebas.md}. Verificación automática de mensajes con \code{verify} (D16). Mutaciones detectadas. (Los sanitizers y las limitaciones del entorno ya están abajo, \#23.)}
+
+\subsection{Sanitizers, y lo que no demuestran}
+\label{sec:sanitizers}
+
+La suite completa corre bajo AddressSanitizer~\cite{Serebryany2012} y
+UndefinedBehaviorSanitizer con un objetivo propio del Makefile (D35):
+
+\begin{quote}
+\code{make test-san}
+\end{quote}
+
+El resultado es \textbf{205 de 205 pruebas sin un solo reporte} de ASan,
+UBSan ni LeakSanitizer. Dos detalles del montaje importan para que ese cero
+signifique algo. El primero es que el objetivo limpia antes y después en vez
+de convivir con la compilación normal: los objetos instrumentados comparten
+el directorio de salida y los ejecutables viven en la raíz del repositorio,
+así que al quedar más nuevos que los normales \code{make} los daría por
+actualizados y un \code{make test} posterior seguiría corriendo binarios
+instrumentados sin avisar. El segundo es
+\code{UBSAN\_OPTIONS=halt\_on\_error=1}: UBSan por omisión imprime y
+continúa, de modo que sin esa opción una corrida con comportamiento
+indefinido reportado terminaría con código de salida cero y el «cero
+errores» no verificaría nada. Se comprobó con un programa de control de tres
+líneas, que ASan y UBSan sí reportan.
+
+Dicho eso, conviene ser explícito sobre el alcance, porque es fácil leer
+«cero errores» como «no hay carreras»:
+
+\begin{itemize}
+\item \textbf{ASan no busca carreras de datos.} Detecta errores de memoria:
+      accesos fuera de rango, uso después de liberar, fugas. Una carrera que
+      solo produce un entrelazado incorrecto de valores \emph{válidos} le
+      pasa invisible.
+\item \textbf{UBSan tampoco.} Detecta comportamiento indefinido del lenguaje
+      ---desbordes con signo, desplazamientos inválidos, desalineamientos---
+      no concurrencia.
+\item \textbf{ThreadSanitizer, que sí las busca, no aplica.} Instrumenta
+      hilos de un mismo proceso, y este sistema son nueve procesos separados
+      sobre memoria compartida. No existe una herramienta equivalente para
+      ese caso.
+\end{itemize}
+
+Lo que argumenta la ausencia de carreras en este proyecto no son los
+sanitizers sino los invariantes verificados y las pruebas de intercalados:
+\code{verify} cruzando los CSV de todos los procesos para comprobar que no
+hubo pérdidas, duplicados, contenido alterado ni violaciones de FIFO (D16);
+las cuatro corridas de conservación y escala (D30); las mutaciones del
+cierre que las pruebas detectan y que pasarían inadvertidas sin ellas (D31);
+y las carreras de ciclo de vida ejecutadas con los binarios reales ---cierre
+en plena actividad, incorporaciones durante el cierre y cuatro finalizadores
+concurrentes--- (D34). Los sanitizers son una red complementaria, no la que
+sostiene el argumento.
+
+\subsection{Limitaciones del entorno}
+
+La suite ---con y sin sanitizers--- se ejecuta en GNU/Linux, el entorno de
+referencia declarado. macOS no implementa
+\code{pthread\_condattr\_setclock}~\cite{POSIX2024}, que es la opción de
+POSIX con la que las variables de condición de este proyecto quedan
+configuradas en \code{CLOCK\_MONOTONIC} (D13, D20); además varias pruebas
+usan \code{/proc} y \code{MAP\_ANONYMOUS}. En macOS el código compila y
+sirve para desarrollo local, pero la suite completa requiere Linux.
+
+El objetivo \code{test-san} recompila desde cero dos veces, así que no
+reemplaza a \code{make test} en el ciclo de desarrollo: es una verificación
+aparte.
