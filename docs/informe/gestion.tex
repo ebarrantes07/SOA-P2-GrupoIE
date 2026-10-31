@@ -67,15 +67,15 @@ escribiendo en su posición anterior y dejaba un hueco de bytes nulos. Lo
 encontró la prueba de aislamiento. El arreglo toma un candado de escritura
 sobre el archivo y solo entonces trunca.
 
-\textbf{Una inexactitud en la documentación, no en el código.} La fila
-\code{lock\_acquire} del resumen declara incluir la readquisición del mutex
-al despertar de la espera. No la incluye: el tiempo de bloqueo se mide una
-sola vez, alrededor de la toma inicial, y la readquisición queda contabilizada
-en el tiempo de espera. La discrepancia se detectó al cruzar la
-documentación con el código y se confirmó con los datos: la nota implicaba
-unos 60~\textmu s y lo medido son 0.89 a 1.74~\textmu s. El efecto es de
-interpretación de una columna, no de medición, y queda declarado acá en vez
-de corregido a destiempo.
+\textbf{Una inexactitud que los datos delataban.} La fila
+\code{lock\_acquire} del resumen declaraba incluir la readquisición del
+mutex al despertar de la espera. No la incluía: el tiempo de bloqueo se mide
+una sola vez, alrededor de la toma inicial, y la readquisición queda
+contabilizada en el tiempo de espera. Lo encontró el cruce de la
+documentación con el código ---no una prueba, que habría pasado igual--- y
+los números lo confirmaron: la nota implicaba unos 60~\textmu s y lo medido
+son 0.89 a 1.74~\textmu s, entre 35 y 67 veces menos. Se corrigió la nota y
+la prueba que la aseveraba.
 
 \subsection{Flujo de trabajo}
 
