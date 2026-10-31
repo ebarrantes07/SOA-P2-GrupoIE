@@ -36,6 +36,7 @@ struct flags {
     int pause_result;
     unsigned long long pause_ms;
     unsigned long long wait_ns;
+    unsigned long long lock_ns;
     unsigned wait_count;
 };
 
@@ -372,8 +373,16 @@ static bool test_snapshot_without_contention(void) {
 /* Un productor contra un buffer lleno tiene que dormirse de verdad, y la
  * espera tiene que quedar contada. El padre comprueba primero que el hijo
  * sigue bloqueado y recien despues le hace lugar: eso demuestra que put
- * bloquea, que las pruebas de un solo proceso no podian mostrar. */
+ * bloquea, que las pruebas de un solo proceso no podian mostrar.
+ *
+ * Ademas fija donde se cuenta la readquisicion del mutex (#61). El padre
+ * hace lugar y senala con el mutex tomado, y lo retiene HOLD_MS mas: el
+ * hijo ya fue despertado, pero cond_wait no retorna hasta recuperar el
+ * mutex. Esos HOLD_MS tienen que aparecer en wait_ns y no en lock_ns, que
+ * mide solo el sync_lock inicial (sin contencion en el hijo). Es lo que
+ * declaran las notas de wait_space y lock_acquire del resumen. */
 static bool test_put_blocks_and_counts_the_wait(void) {
+    enum { HOLD_MS = 300 };
     const char *name;
     size_t len;
     struct instance *inst = open_instance("wait", 1, &name, &len);   /* capacidad 1 */
@@ -402,6 +411,7 @@ static bool test_put_blocks_and_counts_the_wait(void) {
             _exit(3);
         }
         f->wait_ns = s.wait_ns;
+        f->lock_ns = s.lock_ns;
         f->wait_count = s.wait_count;
         f->done = 1;
         memory_unmap(mine, mlen);
@@ -416,15 +426,24 @@ static bool test_put_blocks_and_counts_the_wait(void) {
     nanosleep(&pausa, NULL);
     CHECK(f->done == 0);        /* sigue bloqueado: put espera, no falla */
 
+    /* Le hace lugar como sync_get, pero retiene el mutex despues del
+     * signal. */
+    sync_lock(inst);
     struct message out;
-    CHECK(sync_get(inst, &out, NULL) == GET_OK);   /* le hace lugar */
+    inst->dequeue_seq++;
+    buffer_pop(inst, &out);
+    CHECK(pthread_cond_signal(&inst->not_full) == 0);
+    struct timespec hold = {0, HOLD_MS * 1000000L};
+    nanosleep(&hold, NULL);
+    sync_unlock(inst);
 
     int status;
     CHECK(waitpid(pid, &status, 0) == pid);
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     CHECK(f->done == 1);
     CHECK(f->wait_count >= 1);                     /* durmio al menos una vez */
-    CHECK(f->wait_ns > 0);
+    CHECK(f->wait_ns >= HOLD_MS * 1000000ull);     /* la readquisicion esta aca */
+    CHECK(f->lock_ns < HOLD_MS * 1000000ull / 3);  /* y no aca */
 
     munmap(f, sizeof(*f));
     memory_unmap(inst, len);

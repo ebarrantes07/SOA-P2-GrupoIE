@@ -164,15 +164,24 @@ static void row_f64(FILE *f, const char *metric, const char *role, uint32_t id,
 
 /* Una fila por casilla usada. Las esperas se declaran por lo que de verdad
  * contienen, que es el tercer criterio del #18: ninguna se presenta como
- * exclusiva de una causa si combina varias. */
+ * exclusiva de una causa si combina varias.
+ *
+ * pthread_cond_wait vuelve a tomar el mutex antes de retornar, y sync.c
+ * cronometra la llamada entera dentro de wait_ns; lock_ns mide solo el
+ * sync_lock inicial. Por eso la readquisicion se declara en la espera y no
+ * en lock_acquire (#61; lo verifica put_blocks_and_counts_the_wait en
+ * tests/test_sync.c). */
 static void participant_rows(FILE *f, const struct participant_table *t,
                              enum role role) {
     const bool prod = (role == ROLE_PRODUCER);
     const char *role_name = prod ? "producer" : "consumer";
     const char *wait_metric = prod ? "wait_space" : "wait_data";
     const char *wait_note = prod
-        ? "espera por espacio en not_full; no incluye la pausa simulada"
-        : "espera por datos en not_empty; incluye la espera final hasta el cierre";
+        ? "espera en not_full con la readquisicion del mutex; no incluye la pausa simulada"
+        : "espera en not_empty con la readquisicion del mutex; incluye la espera final hasta el cierre";
+    const char *lock_note = prod
+        ? "solo la adquisicion inicial del mutex; la readquisicion tras cond_wait va en wait_space"
+        : "solo la adquisicion inicial del mutex; la readquisicion tras cond_wait va en wait_data";
 
     for (uint32_t i = 0; i < t->used; i++) {
         const struct participant_slot *s = &t->slots[i];
@@ -180,8 +189,7 @@ static void participant_rows(FILE *f, const struct participant_table *t,
                 prod ? "aceptados" : "extraidos");
         row_u64(f, wait_metric, role_name, s->id, s->wait_ns, "ns", wait_note);
         row_u64(f, "wait_count", role_name, s->id, s->wait_count, "count", NULL);
-        row_u64(f, "lock_acquire", role_name, s->id, s->lock_ns, "ns",
-                "incluye la readquisicion al despertar de cond_wait");
+        row_u64(f, "lock_acquire", role_name, s->id, s->lock_ns, "ns", lock_note);
         /* Un participante que no se retiro no tiene left_ns: informar
          * left_ns - joined_ns daria un numero enorme al envolver. */
         if (s->state == SLOT_LEFT && s->left_ns >= s->joined_ns)
