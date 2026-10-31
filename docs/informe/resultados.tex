@@ -10,7 +10,7 @@ el cierre cuando terminan todos los productores. Los escenarios se nombran
 por la media de pausa de cada lado: 2/8, 5/5 y 8/2~ms. Las semillas se
 derivan de una base única (20261027) por proceso y por corrida, así que
 repetir el experimento con la misma base reproduce las mismas secuencias de
-pausas (D27).
+pausas.
 
 Las pausas son exponenciales, de modo que su desviación estándar es
 \emph{igual} a su media. Esa fluctuación no es ruido a eliminar: es
@@ -19,7 +19,7 @@ protagonista de todo lo que sigue.
 Las 45 corridas terminaron válidas: \code{verify} sin violaciones,
 \code{invariant\_ok = 1} y 800 aceptados igual a 800 extraídos en todas. El
 análisis se niega a correr si alguna no cumple eso, porque promediar una
-corrida con pérdidas da números que no significan nada (D33).
+corrida con pérdidas da números que no significan nada.
 
 \begin{table}[!t]
 \caption{Entorno de medición}
@@ -54,8 +54,10 @@ ningún resultado está explicado por falta de procesador.
 
 El código medido es el commit \code{6720836}. Después de la medición,
 \code{src/logger.c} cambió para tomar un candado de escritura al abrir el
-CSV en vez de truncar a ciegas (D30, D32), y \code{src/producer.c} cambió
-una línea de mensaje de error. Ninguno de los dos toca el camino por
+CSV en vez de truncar a ciegas ---una prueba de aislamiento mostró que dos
+procesos apuntados al mismo archivo se lo truncaban entre sí---, y
+\code{src/producer.c} cambió una línea de mensaje de error. Ninguno de los
+dos toca el camino por
 mensaje: el cuerpo de \code{csv\_logger\_write} es idéntico, así que lo
 medido sigue describiendo el código entregado salvo por el costo de apertura
 de cada proceso, que se paga una vez.
@@ -103,7 +105,7 @@ $500 / 1.073 \approx 466$~msgs/s, que es justo lo que rodean los tres
 valores medidos. Del lado del consumo el efecto no existe, porque los
 consumidores no tienen cuota: el que saca pausas cortas procesa más mensajes
 y compensa al lento. Por eso el 5--11\,\% que le falta a esa columna
-\textbf{no es costo de sincronización} (D33).
+\textbf{no es costo de sincronización}.
 
 \subsection{Latencia}
 
@@ -297,4 +299,5 @@ para discutir diferencias de pocos por ciento.
 
 El detalle completo del análisis, incluidas las limitaciones de lo que estos
 datos \emph{no} permiten concluir, está en
-\code{docs/analisis\_experimento.md} y en la entrada D33 de la bitácora.
+\code{docs/analisis\_experimento.md} y en la bitácora de
+decisiones~\cite{Bitacora2026}.

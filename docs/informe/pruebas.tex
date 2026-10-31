@@ -7,7 +7,7 @@
 \label{sec:sanitizers}
 
 La suite completa corre bajo AddressSanitizer~\cite{Serebryany2012} y
-UndefinedBehaviorSanitizer con un objetivo propio del Makefile (D35):
+UndefinedBehaviorSanitizer con un objetivo propio del Makefile:
 
 \begin{quote}
 \code{make test-san}
@@ -47,12 +47,12 @@ Dicho eso, conviene ser explícito sobre el alcance, porque es fácil leer
 Lo que argumenta la ausencia de carreras en este proyecto no son los
 sanitizers sino los invariantes verificados y las pruebas de intercalados:
 \code{verify} cruzando los CSV de todos los procesos para comprobar que no
-hubo pérdidas, duplicados, contenido alterado ni violaciones de FIFO (D16);
-las cuatro corridas de conservación y escala (D30); las mutaciones del
-cierre que las pruebas detectan y que pasarían inadvertidas sin ellas (D31);
-y las carreras de ciclo de vida ejecutadas con los binarios reales ---cierre
+hubo pérdidas, duplicados, contenido alterado ni violaciones de FIFO; las
+cuatro corridas de conservación y escala; las mutaciones del cierre que las
+pruebas detectan y que pasarían inadvertidas sin ellas; y las carreras de
+ciclo de vida ejecutadas con los binarios reales ---cierre
 en plena actividad, incorporaciones durante el cierre y cuatro finalizadores
-concurrentes--- (D34). Los sanitizers son una red complementaria, no la que
+concurrentes---. Los sanitizers son una red complementaria, no la que
 sostiene el argumento.
 
 \subsection{Limitaciones del entorno}
@@ -61,7 +61,7 @@ La suite ---con y sin sanitizers--- se ejecuta en GNU/Linux, el entorno de
 referencia declarado. macOS no implementa
 \code{pthread\_condattr\_setclock}~\cite{POSIX2024}, que es la opción de
 POSIX con la que las variables de condición de este proyecto quedan
-configuradas en \code{CLOCK\_MONOTONIC} (D13, D20); además varias pruebas
+configuradas en \code{CLOCK\_MONOTONIC}; además varias pruebas
 usan \code{/proc} y \code{MAP\_ANONYMOUS}. En macOS el código compila y
 sirve para desarrollo local, pero la suite completa requiere Linux.
 

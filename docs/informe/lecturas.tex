@@ -19,22 +19,23 @@ Esa formulación trata la capacidad como un \emph{stock de permisos}. Las
 posiciones vacías no son un número que se consulta, son fichas que se
 toman y se devuelven: insertar consume un permiso de espacio y produce un
 permiso de dato. Nuestra implementación conserva la idea y cambia su
-representación. El contador \code{count} del buffer circular (D2) cumple el
+representación. El contador \code{count} del buffer circular cumple el
 papel de los dos semáforos a la vez, porque con el mutex tomado se pueden
 evaluar los dos predicados --- \code{count == capacity} y \code{count == 0}
 --- sobre el mismo estado consistente. Lo que no cambia es la contabilidad:
 el invariante \code{accepted = extracted + pending} que el verificador
-comprueba al final de cada corrida (D16) es exactamente la conservación de
-permisos de Dijkstra, escrita sobre los CSV en vez de sobre semáforos.
+comprueba al final de cada corrida (sección~\ref{sec:pruebas}) es
+exactamente la conservación de permisos de Dijkstra, escrita sobre los CSV
+en vez de sobre semáforos.
 
 Dijkstra también muestra, en la sección~4.1, que el buffer acotado con
 varios productores o varios consumidores necesita \emph{además} un semáforo
 binario de exclusión, que él llama \emph{«buffer manipulation»}: los dos
 contadores regulan la disponibilidad, pero no impiden que dos productores
 se mezclen al escribir. Es la misma separación de responsabilidades que
-nuestro diseño hace explícita con un mutex y cuatro variables de condición
-(D1, D3): los contadores dicen \emph{cuándo} se puede, el mutex dice
-\emph{quién} está adentro.
+nuestro diseño hace explícita con un mutex y cuatro variables de condición:
+los contadores dicen \emph{cuándo} se puede, el mutex dice \emph{quién} está
+adentro.
 
 Y advierte que el orden importa. En la sección~4.1 pide al lector
 convencerse de que \emph{«the order of the two V-operations in the producer
@@ -65,8 +66,9 @@ shared data»} y \emph{«Using a Condition variable: scheduling shared
 resources»}. El mutex es para acceder a datos compartidos; la variable de
 condición es para \emph{planificar} el acceso a un recurso. Son dos
 problemas distintos con dos herramientas distintas, que es la misma
-distinción que el enunciado pide mantener y que D3 implementa al dejar en
-\code{sync.c} la única capa que toca mutex y condvars.
+distinción que el enunciado pide mantener y que nuestro diseño implementa al
+concentrar en \code{sync.c} la única capa que toca mutex y condvars
+(sección~\ref{sec:protocolo}).
 
 Sobre el predicado, Birrell recomienda un patrón y lo escribe así:
 
@@ -103,19 +105,19 @@ De ahí se sigue su política de señalización, en la subsección
 most one thread can usefully be awoken»}, y \code{Broadcast} cuando
 \emph{«you really need to awaken multiple threads, because the resource you
 have just made available can be used by multiple other threads»}. Es
-literalmente el criterio de D3: una inserción libera un dato y despierta con
-\code{signal} a un consumidor; una extracción libera una casilla y despierta
-a un productor; el corte a \code{CLOSING} vuelve falso el predicado de
-\emph{todos} los que esperan, así que va \code{broadcast} sobre las cuatro
-condvars.
+literalmente el criterio de nuestro protocolo (sección~\ref{sec:protocolo}):
+una inserción libera un dato y despierta con \code{signal} a un consumidor;
+una extracción libera una casilla y despierta a un productor; el corte a
+\code{CLOSING} vuelve falso el predicado de \emph{todos} los que esperan,
+así que va \code{broadcast} sobre las cuatro condvars.
 
 En un punto nos apartamos de él a propósito. Birrell observa que
 \code{Broadcast} \emph{«allows you to be less careful about separating
 different wait reasons into different condition variables»}. Nosotros
 elegimos lo contrario: separar las causas de espera en cuatro condvars
 (\code{not\_full}, \code{not\_empty}, \code{closing}, \code{all\_left}) y
-usar \code{signal} donde alcanza. El motivo está en D20: la pausa simulada
-del productor duerme en \code{closing} y no en \code{not\_full}, porque ahí
+usar \code{signal} donde alcanza. El motivo es que la pausa simulada del
+productor duerme en \code{closing} y no en \code{not\_full}, porque ahí
 robaría un \code{signal} destinado a un productor que de verdad espera
 espacio. Birrell ofrece el intercambio ---simplicidad contra
 rendimiento--- y el proyecto toma el otro lado, con la espera medida por
@@ -135,16 +137,21 @@ que varias comodidades de su modelo no se heredan:
 \item \textbf{Nada de punteros en el estado compartido.} Donde Birrell
       comparte variables globales, acá una dirección virtual de un proceso
       no vale en otro: el buffer se indexa con enteros y desplazamientos
-      (D1).
+      (sección~\ref{sec:arquitectura}).
 \item \textbf{Las primitivas hay que configurarlas y son objetos del
       segmento.} Mutex y condvars viven dentro de la memoria compartida y
       requieren \code{PTHREAD\_PROCESS\_SHARED}~\cite{POSIX2024}; alguien
       las crea y alguien las destruye. De ahí el protocolo de cierre con un
-      finalizador único (D9, D10), que en un modelo de hilos no existe
-      porque el runtime libera todo al terminar el proceso.
+      finalizador único (sección~\ref{sec:protocolo}), que en un modelo de
+      hilos no existe porque el runtime libera todo al terminar el proceso.
 \item \textbf{Nadie limpia por uno.} Un hilo que muere se lleva su pila; un
       proceso que muere deja su referencia tomada y el segmento con nombre
-      en el sistema. Es la limitación que D31 documenta ante caídas.
+      en el sistema. Un participante registrado que no se retira cuelga el
+      cierre ---el finalizador se queda esperando en \code{all\_left} y
+      agota su plazo---, y el objeto de \code{/dev/shm} sobrevive a todos
+      los procesos: hay que borrarlo a mano. Es un límite asumido ---el
+      enunciado no pide recuperación ante caídas--- y documentado como tal,
+      no un defecto encontrado tarde.
 \item \textbf{Las herramientas no cruzan la frontera.} ThreadSanitizer
       instrumenta hilos de un proceso, así que no sirve acá
       (sección~\ref{sec:pruebas}).
