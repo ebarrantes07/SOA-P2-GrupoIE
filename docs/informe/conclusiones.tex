@@ -1,4 +1,26 @@
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-\pendiente{ambos: Qué se logró, qué garantías vienen del algoritmo y cuáles del sistema operativo, y límites.}
+\begin{itemize}
+\item \textbf{El protocolo cumple las garantías del enunciado,} sostenido
+      por dos clases de evidencia que no se sustituyen: un verificador
+      externo a la implementación, sin violaciones de conservación,
+      unicidad, integridad ni FIFO en ninguna corrida, y una suite de
+      intercalados bajo sanitizers sin reportes. Los sanitizers no buscan
+      carreras; el verificador no detecta errores de memoria.
+
+\item \textbf{Subir la capacidad del buffer es un intercambio, no una
+      mejora.} Aumenta el caudal solo cuando ninguno de los dos lados es el
+      cuello de botella, y la latencia sube siempre. En régimen saturado
+      deja de medir el protocolo: es la capacidad entre la tasa de drenaje.
+
+\item \textbf{La frontera entre el algoritmo y el sistema es nítida.} El
+      algoritmo garantiza exclusión, conservación, orden y terminación; el
+      sistema decide quién de los que esperan avanza y cuándo. Ninguna
+      propiedad de corrección depende de esa frontera; varios números sí.
+
+\item \textbf{Los límites están declarados, no descubiertos al final:} sin
+      recuperación ante la caída arbitraria de un proceso, sin herramienta
+      que busque carreras entre procesos separados, y con mediciones de un
+      binario sin optimizar sobre un hipervisor.
+\end{itemize}

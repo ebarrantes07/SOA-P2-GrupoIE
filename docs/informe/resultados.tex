@@ -1,10 +1,294 @@
 \section{Resultados del experimento}
 \label{sec:resultados}
 
-\pendiente{Emmanuel, \#25: Diseño (9 combinaciones, 5 repeticiones, semillas), entorno (CPU, sistema, compilador) y commit medido. Throughput y latencia media con media $\pm$ desviación, p95 y esperas. Al menos dos gráficas (las tres de \code{graficas/} ya compilan). Si aumentar la capacidad mejora, solo acumula o desplaza la espera. Efecto de los logs. Explicación de la variación. Fuentes: \code{docs/analisis\_experimento.md}, D33.}
+\subsection{Diseño y entorno}
 
-% Figuras ya listas (pgfplots, datos en graficas/*.dat): moverlas o
-% recortarlas según el texto final.
+El experimento son 45 corridas: 3 capacidades (1, 8 y 64) por 3 escenarios
+de pausa por 5 repeticiones. Cada corrida levanta 4 productores y 4
+consumidores con 200 mensajes por productor, o sea 800 por corrida, y pide
+el cierre cuando terminan todos los productores. Los escenarios se nombran
+por la media de pausa de cada lado: 2/8, 5/5 y 8/2~ms. Las semillas se
+derivan de una base única (20261027) por proceso y por corrida, así que
+repetir el experimento con la misma base reproduce las mismas secuencias de
+pausas.
+
+Las pausas son exponenciales, de modo que su desviación estándar es
+\emph{igual} a su media. Esa fluctuación no es ruido a eliminar: es
+protagonista de todo lo que sigue.
+
+Las 45 corridas terminaron válidas: \code{verify} sin violaciones,
+\code{invariant\_ok = 1} y 800 aceptados igual a 800 extraídos en todas. El
+análisis se niega a correr si alguna no cumple eso, porque promediar una
+corrida con pérdidas da números que no significan nada.
+
+\begin{table}[!t]
+\caption{Entorno de medición}
+\label{tab:entorno}
+\centering
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Componente & Valor \\
+\midrule
+Procesador & Intel Core i7-1260P, 16 CPU lógicas \\
+Memoria & 7.6~GiB \\
+Sistema & Ubuntu 24.04.4 LTS sobre WSL2, x86-64 \\
+Compilador & GCC 13.3.0, C17, sin \code{-O} \\
+Biblioteca C & glibc 2.39 \\
+Reloj & \code{CLOCK\_MONOTONIC} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tres rasgos del entorno (tabla~\ref{tab:entorno}) afectan la lectura y
+conviene decirlos antes de los números. Es un \textbf{hipervisor}, no
+hardware desnudo: WSL2 presenta 16 CPU uniformes, pero el i7-1260P es un
+diseño híbrido y el hipervisor no expone esa diferencia, así que un proceso
+que migra entre tipos de núcleo es varianza que no se puede controlar ni
+medir desde dentro. \textbf{No hay optimización}: el Makefile no pasa
+\code{-O}, así que los valores absolutos serían mejores con \code{-O2};
+siendo el mismo binario en todas las corridas, las comparaciones valen. Y
+los \textbf{9 procesos de una corrida caben de sobra en 16 CPU}, así que
+ningún resultado está explicado por falta de procesador.
+
+\subsection{Throughput}
+
+El techo teórico de cada escenario es la tasa del lado más lento: con 4
+procesos por lado y pausas de media $m$, cada lado mueve $4000/m$ mensajes
+por segundo, y el sistema no puede ir más rápido que el mínimo de los dos.
+
+\begin{table}[!t]
+\caption{Throughput (media $\pm$ desviación entre 5 repeticiones) y
+porcentaje del techo teórico, que vale 500, 800 y 500~msgs/s según el
+escenario}
+\label{tab:throughput}
+\centering
+\small
+\begin{tabular}{@{}clll@{}}
+\toprule
+Cap. & 2/8~ms & 5/5~ms & 8/2~ms \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{Throughput (msgs/s)}} \\
+1  & $488.1 \pm 14.7$ & $611.4 \pm 7.2$  & $459.5 \pm 32.1$ \\
+8  & $492.4 \pm 17.3$ & $695.4 \pm 29.4$ & $477.0 \pm 26.2$ \\
+64 & $473.2 \pm 15.7$ & $721.5 \pm 13.6$ & $445.4 \pm 12.5$ \\
+\multicolumn{4}{@{}l}{\emph{Porcentaje del techo}} \\
+1  & 98\,\% & 76\,\% & 92\,\% \\
+8  & 98\,\% & 87\,\% & 95\,\% \\
+64 & 95\,\% & 90\,\% & 89\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La tabla~\ref{tab:throughput} y la figura~\ref{fig:throughput} muestran el
+resultado: la capacidad solo mueve la aguja en el escenario balanceado.
+
+Ese techo no es alcanzable cuando lo fija el lado que tiene cuota. En 8/2 el
+lado lento es el productor, que tiene \code{--messages 200}, así que la
+corrida no puede terminar antes de que \emph{el más lento de los cuatro}
+ponga sus 200 mensajes. Con 200 pausas exponenciales la media muestral de
+cada productor se desvía $1/\sqrt{200} = 7.1$\,\%, y el máximo de cuatro cae
+unas 1.03 desviaciones por encima, de modo que el intervalo se estira
+$\approx 7.3$\,\% y el techo realista de esa columna es
+$500 / 1.073 \approx 466$~msgs/s, que es justo lo que rodean los tres
+valores medidos. Del lado del consumo el efecto no existe, porque los
+consumidores no tienen cuota: el que saca pausas cortas procesa más mensajes
+y compensa al lento. Por eso el 5--11\,\% que le falta a esa columna
+\textbf{no es costo de sincronización}.
+
+\subsection{Latencia}
+
+\begin{table}[!t]
+\caption{Latencia de inserción a extracción en ms (media $\pm$ desviación
+entre 5 repeticiones). El p95 es exacto, recalculado desde los CSV de los
+consumidores}
+\label{tab:latencia}
+\centering
+\small
+\begin{tabular}{@{}clll@{}}
+\toprule
+Cap. & 2/8~ms & 5/5~ms & 8/2~ms \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{Media}} \\
+1  & $1.95 \pm 0.06$   & $0.77 \pm 0.07$  & $0.08 \pm 0.01$ \\
+8  & $15.99 \pm 0.58$  & $4.77 \pm 0.82$  & $0.08 \pm 0.01$ \\
+64 & $128.05 \pm 4.74$ & $24.62 \pm 23.81$ & $0.06 \pm 0.01$ \\
+\multicolumn{4}{@{}l}{\emph{Percentil 95}} \\
+1  & $5.95 \pm 0.39$   & $3.17 \pm 0.27$  & $0.17 \pm 0.01$ \\
+8  & $26.55 \pm 0.99$  & $13.41 \pm 1.44$ & $0.18 \pm 0.02$ \\
+64 & $160.52 \pm 5.11$ & $46.83 \pm 33.26$ & $0.13 \pm 0.03$ \\
+\multicolumn{4}{@{}l}{\emph{Máximo}} \\
+1  & $14.98 \pm 2.78$  & $8.38 \pm 1.54$  & $1.66 \pm 0.49$ \\
+8  & $38.50 \pm 1.92$  & $21.83 \pm 4.41$ & $1.47 \pm 0.40$ \\
+64 & $177.19 \pm 9.60$ & $56.73 \pm 38.34$ & $1.69 \pm 0.93$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La figura~\ref{fig:latencia} muestra el rango completo ---tres órdenes de
+magnitud entre la celda más rápida y la más lenta--- y la
+tabla~\ref{tab:latencia} los valores. En la columna 2/8 la latencia no es
+una medición sino una división. Por la ley de Little~\cite{Little1961}, la
+ocupación media del buffer es el producto del throughput por la latencia, y
+da 0.95, 7.87 y 60.59 mensajes: el buffer está lleno al 94--98\,\% de su
+capacidad. Con el buffer lleno, un mensaje tarda en cruzarlo
+\emph{capacidad / tasa de drenaje}, lo que predice 2.05, 16.25 y 135.26~ms
+contra los tres valores medidos. En régimen saturado, elegir la capacidad
+\emph{es} elegir la latencia.
+
+La cola larga tiene un efecto que las medias esconden: vuelve la latencia
+más \emph{predecible}. En 2/8 el cociente p95/media cae de 3.03 a 1.24 y el
+de máximo/media de 7.66 a 1.38 al pasar de capacidad 1 a 64. Con una casilla
+el peor mensaje tarda 7.7 veces la media; con 64, apenas 1.38. Para un
+compromiso de percentil y no de promedio, peor media con menos dispersión
+puede ser el lado conveniente.
+
+La columna 8/2 mide algo distinto que las otras dos. Ahí el buffer está
+vacío (ocupación media de 0.03 mensajes sobre 64 casillas) y el consumidor
+se bloquea en 197 de cada 200 extracciones, así que casi todo mensaje llega
+a un consumidor que ya estaba dormido: lo que se mide no es tiempo de cola
+sino el costo de despertarlo, unos 60~\textmu s en este entorno. Eso explica
+sus tres rarezas a la vez --- es diminuta, es plana contra la capacidad y es
+la única celda donde el parámetro que varía el experimento no afecta al
+resultado --- y por qué no debe compararse con las otras dos como si fuera
+la misma magnitud.
+
 \input{graficas/fig_throughput}
 \input{graficas/fig_latencia}
+
+\subsection{Dónde se espera}
+
+\begin{table}[!t]
+\caption{Espera acumulada de cada rol como porcentaje de su propio tiempo de
+vida, y bloqueos por corrida de 200 operaciones por proceso}
+\label{tab:esperas}
+\centering
+\small
+\begin{tabular}{@{}cccc@{}}
+\toprule
+Cap. & 2/8~ms & 5/5~ms & 8/2~ms \\
+\midrule
+1  & prod \textbf{73.3} (192) & prod 15.8 (83) & prod 0.1 (4) \\
+   & cons 1.7 (7)             & cons 20.9 (87) & cons \textbf{75.3} (197) \\
+8  & prod \textbf{73.4} (190) & prod 6.1 (26)  & prod 0.0 (0) \\
+   & cons 0.5 (1)             & cons 13.3 (46) & cons \textbf{74.8} (196) \\
+64 & prod \textbf{71.2} (172) & prod 0.6 (2)   & prod 0.0 (0) \\
+   & cons 0.3 (1)             & cons 9.0 (30)  & cons \textbf{77.1} (197) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Las barras del 71--77\,\% de la tabla~\ref{tab:esperas} y de la
+figura~\ref{fig:esperas} no son una propiedad del diseño: son el cociente de
+las pausas. El lado rápido solo puede trabajar a la tasa que le llega, así
+que su ocio sale en forma cerrada como $1 - m_{\text{rápido}}/m_{\text{lento}}$,
+que para 2/8 y 8/2 da $1 - 2/8 = 75$\,\%. Con un escenario 2/16 esa barra
+estaría en 87.5\,\% con el mismo código y la misma capacidad, y por eso es
+inmune a la capacidad.
+
+El corolario es lo que vuelve informativa la columna del medio: para 5/5 la
+predicción es $1 - 5/5 = 0$\,\%, así que \emph{todo} lo que se mide ahí
+---15.8\,\% y 20.9\,\% con capacidad 1--- es pérdida por acoplamiento, y es
+exactamente la parte que la capacidad drena hasta 0.6\,\% y 9.0\,\%. De las
+nueve celdas de la figura, seis están determinadas por los parámetros del
+escenario; la información sobre el buffer vive en la columna balanceada.
+
 \input{graficas/fig_esperas}
+
+\subsection{¿Mejorar, acumular o desplazar?}
+
+\textbf{Las tres cosas, y cuál ocurre lo decide el balance entre los lados.}
+
+El mecanismo es que un proceso solo puede bloquearse cuando el buffer está
+en un \emph{borde}: un productor si está lleno, un consumidor si está vacío.
+En cualquier nivel intermedio nadie puede bloquearse. Con capacidad~1 esa
+zona intermedia no existe ---los únicos niveles posibles son 0 y 1, y 1
+\emph{es} el estado lleno---, así que el buffer no amortigua nada: es un
+encuentro sincrónico donde cada entrega le cuesta una espera a alguien. Con
+capacidad~64 y lados balanceados, el nivel pasa el 81.8\,\% del tiempo donde
+ninguno de los dos puede bloquearse.
+
+Que el nivel llegue a visitar esa zona depende de la \emph{deriva}. Con
+medias iguales no hay deriva: el nivel hace un paseo aleatorio y explora.
+Con medias distintas hay deriva y el nivel se clava contra un borde ---en
+2/8 está lleno el 88\,\% del tiempo con 64 casillas, y en 8/2 vacío el
+99.6\,\%--- de modo que la zona intermedia existe pero el buffer nunca la
+visita.
+
+De ahí las tres respuestas:
+
+\begin{itemize}
+\item \textbf{Solo acumula} cuando un lado es el cuello de botella. En 2/8
+      el sistema ya corre al 98\,\% de su techo con una casilla; de 1 a 64
+      el throughput no se mueve y la espera del productor tampoco
+      (73.3 a 71.2\,\%). Lo único que cambia es cuántos mensajes hay
+      esperando, y eso se paga en latencia: factor 66.
+\item \textbf{Mejora} cuando los dos lados están balanceados. En 5/5 el
+      throughput sube de 611 a 722~msgs/s (+18\,\%), del 76 al 90\,\% del
+      techo, porque el buffer absorbe la fluctuación de las pausas en vez de
+      dejar que cada desajuste frene al otro lado. El precio es latencia:
+      de 0.77 a 24.62~ms.
+\item \textbf{Desplaza} según el escenario, no según la capacidad. La espera
+      cambia de dueño: en 2/8 la lleva el productor, en 8/2 el consumidor,
+      en 5/5 está repartida. La capacidad no reparte la espera entre roles
+      ---eso lo hace el escenario--- pero sí reduce la parte evitable.
+\end{itemize}
+
+Hay una identidad que liga las dos primeras figuras: lo que le falta al
+throughput para llegar al techo es el tiempo que el cuello de botella pasó
+sin trabajar. En 2/8 con capacidad 1, 97.6\,\% del techo más 1.7\,\% de ocio
+del consumidor suman 99.3; en 5/5 con capacidad 64, 90.2 más 9.0 suman 99.2.
+El throughput que no se logró no se gastó en el protocolo: se fue en el lado
+lento esperando a su contraparte.
+
+\subsection{Efecto de los logs sobre la propia medición}
+
+Cada corrida escribe unos 155~KiB de CSV repartidos en 9 archivos, con tres
+filas por mensaje. Para saber si la instrumentación contamina lo medido se
+corrió un A/B del mismo escenario con los CSV en un archivo y con los CSV a
+\code{/dev/null}, 7 repeticiones por celda. Con las pausas del experimento
+(5/5~ms) la diferencia es de $-1.1$\,\%, o 0.4 errores estándar:
+\textbf{no medible}, porque la pausa de 5~ms por mensaje domina por tres
+órdenes de magnitud sobre escribir unos 200~bytes. Sin pausas
+(\code{--mean-ms 0}, 5000 mensajes por productor) sí se ve: $+6.0$\,\%, o
+2.7 errores estándar, equivalente a 0.53~\textmu s de tiempo de pared por
+mensaje.
+
+Dos decisiones anteriores a esta medición explican que el costo sea tan
+bajo: la escritura ocurre fuera de la región crítica, así que una llamada al
+sistema lenta no serializa el buffer, y cada proceso escribe su propio
+archivo, así que no hay contención entre ellos. El alcance del A/B queda
+declarado: con \code{/dev/null} el logger sigue formateando cada fila, de
+modo que la comparación aísla la escritura al archivo y no la
+instrumentación completa.
+
+\subsection{De dónde viene la variación}
+
+Las desviaciones de las tablas tienen tres fuentes identificables, y
+conviene separarlas de los efectos que el experimento quiere medir.
+
+La primera es \textbf{la fluctuación de las pausas}, que es irreducible por
+construcción: en una exponencial la desviación es igual a la media, y la
+media muestral de 200 extracciones se desvía $1/\sqrt{200} = 7.1$\,\%. Eso
+fija un piso de ruido del orden del 3\,\% para el agregado de 800 pausas por
+corrida, y explica además por qué las columnas con cuota no llegan a su
+techo.
+
+La segunda es \textbf{la inestabilidad propia del régimen balanceado con
+capacidad grande}. En 5/5 con capacidad 64 las 5 repeticiones dieron 7.1,
+7.7, 12.2, 33.6 y 62.5~ms de latencia media ---un factor de 9--- mientras el
+throughput se mantuvo entre 710 y 744. Cuánta cola se acumula depende de la
+suerte de las pausas: la capacidad \emph{permite} la cola, no la obliga. Por
+eso esa celda tiene una desviación casi igual a su media y no conviene citar
+su latencia como un valor característico.
+
+La tercera es \textbf{el entorno}: un hipervisor con otras cargas
+compitiendo y sin control sobre en qué tipo de núcleo corre cada proceso.
+Con 5 repeticiones en un solo equipo, las desviaciones alcanzan para separar
+efectos grandes ---el $+18$\,\% de 5/5, el factor 66 de latencia--- y no
+para discutir diferencias de pocos por ciento.
+
+El detalle completo del análisis, incluidas las limitaciones de lo que estos
+datos \emph{no} permiten concluir, está en
+\code{docs/analisis\_experimento.md} y en la bitácora de
+decisiones~\cite{Bitacora2026}.

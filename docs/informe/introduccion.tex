@@ -1,4 +1,34 @@
 \section{Introducción}
 \label{sec:introduccion}
 
-\pendiente{ambos: Problema (buffer acotado de Dijkstra entre procesos independientes con memoria compartida POSIX), objetivos del enunciado, alcance (una máquina GNU/Linux, sin recuperación ante caídas) y contribuciones. Cerrar con un párrafo que recorra las secciones.}
+El problema del buffer acotado está resuelto desde que Dijkstra lo planteó
+con semáforos~\cite{Dijkstra1965}. Lo que cambia cuando los participantes
+son \emph{procesos} con espacios de direcciones independientes, y no hilos
+de un mismo programa, es casi todo lo que lo rodea: el estado compartido
+tiene que vivir en un objeto con nombre que sobrevive a cada participante,
+las primitivas de sincronización pasan a ser datos dentro de ese objeto en
+vez de servicios del lenguaje, ninguna dirección virtual vale en otro
+proceso, y nadie libera los recursos cuando un proceso termina. Birrell
+describe el modelo de hilos del que se parte y menciona esta alternativa
+solo para advertir que es más costosa~\cite{Birrell1989}.
+
+Este proyecto implementa ese sistema sobre memoria compartida POSIX. Un
+\code{creator} crea una instancia con nombre y capacidad; productores y
+consumidores independientes se conectan, se registran, trabajan y se
+retiran; un \code{finisher} ejecuta un cierre ordenado que drena lo
+pendiente, espera a que todos se retiren y libera los recursos. Un quinto
+ejecutable, \code{verify}, cruza los registros de todos los procesos y
+comprueba la corrección de la corrida. La ejecución ocurre en una sola
+máquina
+GNU/Linux y no cubre la caída arbitraria de un proceso: las garantías se
+aplican a participantes que siguen el protocolo y a un cierre normal. Esa
+frontera no es una omisión cómoda, y la sección de pruebas documenta qué
+ocurre exactamente cuando se cruza.
+
+El informe sigue el orden en que se construyó el sistema: primero el
+segmento compartido y qué dato es privado de cada proceso, después el
+protocolo de registro, inserción, extracción y cierre en pseudocódigo, con
+sus invariantes y sus puntos de efecto, y luego las pruebas y el verificador
+que las respalda. Sobre esa base vienen el experimento, la relación con
+Dijkstra y Birrell, y las tres decisiones de diseño donde había una
+alternativa razonable que se descartó con evidencia.

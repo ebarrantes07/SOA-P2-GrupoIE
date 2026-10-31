@@ -3,15 +3,15 @@
 
 \subsection{Entorno y forma de las pruebas}
 
-\code{make test} corre 205 casos y falla ante cualquier error: 24 son las
-pruebas mínimas del enunciado (Tabla~\ref{tab:pruebas}) y el resto se
-agregó durante el desarrollo. Cada prueba tiene un tiempo límite para que un
+\code{make test} corre las 24 pruebas que cubren los casos mínimos del
+enunciado (Tabla~\ref{tab:pruebas}) junto con las que se agregaron por
+módulo durante el desarrollo, y falla ante cualquier error. Cada prueba tiene un tiempo límite para que un
 bloqueo indefinido se reporte como falla en vez de colgar la suite; ningún
 proceso del sistema termina por tiempo, sino por el protocolo de cierre.
 
 La corrida de referencia se hizo en un contenedor Ubuntu~24.04 (Linux
 x86-64, GCC~13.3.0, glibc~2.39) con las banderas \code{-std=c17 -Wall
--Wextra -Wpedantic -Werror -pthread}. El resultado fue 205/205 en unos
+-Wextra -Wpedantic -Werror -pthread}. La suite pasa completa en unos
 13~s.
 
 % La tabla de ancho completo se define acá para que LaTeX la ubique al
@@ -146,8 +146,20 @@ resultado; en conjunto, los casos sostienen cuatro propiedades:
 \code{make test-san} compila y corre la suite completa con
 AddressSanitizer y UndefinedBehaviorSanitizer
 (\code{-fsanitize=address,undefined}), configurados para que cualquier
-reporte haga fallar la corrida. Resultado: 205/205 casos sin reportes,
-incluido el caso de estrés.
+reporte haga fallar la corrida. Resultado: la suite completa pasa sin
+reportes de ASan, UBSan ni LeakSanitizer, incluido el caso de estrés.
+
+Dos detalles del montaje hacen que ese cero signifique algo. El objetivo
+limpia antes y después en vez de convivir con la compilación normal: los
+objetos instrumentados comparten el directorio de salida y los ejecutables
+viven en la raíz del repositorio, así que al quedar más nuevos que los
+normales \code{make} los daría por actualizados y un \code{make test}
+posterior seguiría corriendo binarios instrumentados sin avisar. Y
+\code{UBSAN\_OPTIONS=halt\_on\_error=1} vuelve fatal el reporte: por
+omisión UBSan imprime y continúa, de modo que una corrida con comportamiento
+indefinido reportado terminaría con código de salida cero y el «cero
+errores» no verificaría nada. Que ambos sanitizers sí reportan se comprobó
+con un programa de control de tres líneas.
 
 Este resultado no prueba que no haya carreras:
 \begin{itemize}
@@ -160,7 +172,7 @@ Este resultado no prueba que no haya carreras:
   compartida.
 \end{itemize}
 La ausencia de carreras se sostiene en otra evidencia: los invariantes de
-la Sección~\ref{sec:protocolo}, el oráculo \code{verify} aplicado a cada
+la Sección~\ref{sec:protocolo}, el verificador \code{verify} aplicado a cada
 corrida y las pruebas de intercalados (cierre durante actividad y
 carreras de ciclo de vida).
 
@@ -171,9 +183,14 @@ carreras de ciclo de vida).
   no implementa \code{pthread\_condattr\_setclock}, y algunas pruebas
   usan \code{/proc} y \code{MAP\_ANONYMOUS}. En macOS el código compila,
   pero solo sirve para desarrollo.
-  \item \textbf{Emulación.} Las corridas se hicieron sobre x86-64 emulado
-  en Apple Silicon, así que los tiempos absolutos (como los 13~s de la
-  suite) son solo orientativos.
+  \item \textbf{Emulación.} Las corridas \emph{de la suite} se hicieron
+  sobre x86-64 emulado en Apple Silicon, así que sus tiempos absolutos
+  (como los 13~s) son solo orientativos. El experimento de la
+  sección~\ref{sec:resultados} se midió en otra máquina, la de la
+  Tabla~\ref{tab:entorno}, y sus tiempos sí se usan como números.
   \item \textbf{Caídas.} Si un participante muere sin retirarse, el
   finalizador espera indefinidamente. El enunciado excluye ese caso.
+  \item \textbf{Costo de \code{test-san}.} Recompila desde cero dos veces,
+  así que es una verificación aparte y no reemplaza a \code{make test} en el
+  ciclo de desarrollo.
 \end{itemize}

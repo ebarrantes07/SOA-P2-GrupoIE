@@ -1,6 +1,24 @@
 \section*{Declaración de Transparencia, Uso de IA y Material Reutilizado}
 
-\pendiente{Ambos, como en el P1: uso de Claude Code como herramienta
-auxiliar y verificación del contenido contra el código y las corridas
-reales. Material reutilizado y su licencia: FNV-1a (dominio público),
-\texttt{xorshift32}~\cite{Marsaglia2003}, plantilla \texttt{IEEEtran}.}
+Para la redacción de este informe se utilizó Claude Code (Anthropic) como
+herramienta auxiliar de apoyo: síntesis de las decisiones de diseño y
+hallazgos técnicos ya documentados por el equipo a lo largo del proyecto,
+redacción del texto en español, generación del pseudocódigo y las figuras a
+partir del código fuente real y de los datos experimentales reproducidos
+para este documento, y revisión ortográfica y de formato. Todo el contenido
+técnico (arquitectura, algoritmos, resultados de pruebas y experimentos) se
+verificó contra el código fuente y las corridas reales del programa antes
+de incluirse.
+
+Fuera de la plantilla LaTeX \code{IEEEtran} (uso académico estándar, bajo su
+propia licencia), el material reutilizado es de dos clases y ninguna
+proviene de terceros. El generador pseudoaleatorio \code{xorshift32} de
+\code{src/rng.c} se reutiliza tal cual del Proyecto~1 de los mismos
+integrantes ---trabajo propio, sin restricciones externas---; la secuencia es
+la publicada por Marsaglia~\cite{Marsaglia2003} y lo nuevo acá es el
+muestreo exponencial por transformada inversa. El checksum de la carga útil
+implementa FNV-1a desde su especificación~\cite{FNV}, que sus autores
+publicaron en el dominio público, sin copiar código. Los scripts de análisis
+usan solo la biblioteca estándar de Python. Todo lo demás ---código fuente,
+pseudocódigo, figuras y datos experimentales--- fue producido por el equipo
+específicamente para este proyecto.

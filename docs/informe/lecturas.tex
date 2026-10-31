@@ -1,4 +1,140 @@
 \section{Relación con las lecturas}
 \label{sec:lecturas}
 
-\pendiente{Emmanuel, \#27: Dijkstra~\cite{Dijkstra1965} (secciones 3.2, 3.3, 4.1 y 4.3): permisos, capacidad y exclusión; por qué importa el orden de las operaciones; no asumir que la suma instantánea de los dos contadores de semáforo coincide con la capacidad si hay operaciones en curso. Birrell~\cite{Birrell1989}: predicados, separación entre exclusión y coordinación, diferencias entre hilos y procesos, y comparación conceptual con semáforos (sin segunda implementación). Identificar las secciones de Birrell usadas. Clase 5 (diapositiva 30) y clase 7 (diapositivas 12 y 13).}
+\subsection{Dijkstra: permisos, capacidad y orden}
+
+Dijkstra introduce los semáforos y las operaciones \code{P} y
+\code{V}~\cite{Dijkstra1965}, y define \code{P} como la operación que
+decrementa su semáforo \emph{«tan pronto como el valor resultante sea no
+negativo»}. Los aplica primero a la exclusión mutua, con un semáforo
+binario, y después construye el buffer acotado con dos semáforos generales:
+el «número de porciones en cola» y, para el espacio libre que agrega el caso
+acotado, el «número de posiciones vacías». La simetría la resume en una
+frase: \emph{«el consumidor produce y el productor consume posiciones vacías
+en el buffer»}.
+
+Esa formulación trata la capacidad como un \emph{stock de permisos}. Las
+posiciones vacías no son un número que se consulta, son fichas que se
+toman y se devuelven: insertar consume un permiso de espacio y produce un
+permiso de dato. Nuestra implementación conserva la idea y cambia su
+representación. El contador \code{count} del buffer circular cumple el
+papel de los dos semáforos a la vez, porque con el mutex tomado se pueden
+evaluar los dos predicados --- \code{count == capacity} y \code{count == 0}
+--- sobre el mismo estado consistente. Lo que no cambia es la contabilidad:
+el invariante \code{accepted = extracted + pending} que el verificador
+comprueba al final de cada corrida (sección~\ref{sec:pruebas}) es
+exactamente la conservación de permisos de Dijkstra, escrita sobre los CSV
+en vez de sobre semáforos.
+
+Conviene enunciar el límite de esa equivalencia, porque es donde la
+formulación con dos semáforos se vuelve delicada. «Ocupadas más vacías igual
+a la capacidad» describe los estados en reposo, no cada instante: un
+productor que ya ejecutó la \code{P} sobre las posiciones vacías y todavía
+no la \code{V} sobre las porciones encoladas tiene una operación en curso, y
+durante ese intervalo los dos contadores suman capacidad menos uno. La suma
+instantánea no es un invariante. Con un solo \code{count} bajo un solo mutex
+ese intervalo no existe hacia afuera: \code{buffer\_push} escribe la casilla,
+avanza el índice e incrementa el contador en la misma región crítica, así
+que ningún otro proceso puede observar un estado intermedio. La contabilidad
+que el proyecto verifica se comprueba en un punto de reposo equivalente: al
+final de la corrida, sobre los CSV, cuando ya no hay operaciones en curso.
+
+Dijkstra también muestra que el buffer acotado con varios productores o
+varios consumidores necesita \emph{además} un semáforo binario de exclusión,
+que él llama «manipulación del buffer»: los dos contadores regulan la
+disponibilidad, pero no impiden que dos productores se mezclen al escribir.
+Es la misma separación de responsabilidades que nuestro diseño hace explícita
+con un mutex y cuatro variables de condición:
+los contadores dicen \emph{cuándo} se puede, el mutex dice \emph{quién} está
+adentro.
+
+Y advierte que el orden importa: pide al lector convencerse de que \emph{«el
+orden de las dos operaciones V en el productor es indiferente»} pero
+\emph{«el orden de las dos operaciones P en el consumidor es esencial»}.
+Dijkstra no explica por qué, pero la razón es la que hace interesante la
+comparación con nuestro mecanismo: si el consumidor
+tomara primero el semáforo de exclusión y después el de datos, se quedaría
+dormido esperando datos \emph{con la exclusión en la mano}, y ningún
+productor podría entrar a producirlos. El interbloqueo no está en ninguna de
+las dos operaciones, está en su orden.
+
+Con mutex y variable de condición ese error es estructuralmente imposible, y
+esa es la ventaja conceptual que justifica nuestra elección
+(sección~\ref{sec:decisiones}).
+\code{pthread\_cond\_wait} suelta el mutex y lo vuelve a tomar de forma
+atómica~\cite{POSIX2024}, así que esperar \emph{dentro} de la región crítica
+no retiene nada: el productor bloqueado en \code{not\_full} dentro de
+\code{sync\_put} está adentro del mutex, y aun así el consumidor puede
+entrar. No hay un orden correcto que haya que recordar, porque hay una sola
+operación. Comparación conceptual, no una segunda implementación: el
+proyecto no reimplementa el buffer con semáforos.
+
+\subsection{Birrell: predicados, exclusión y coordinación}
+
+La separación entre exclusión y coordinación está ya en los títulos de las
+dos secciones centrales de Birrell~\cite{Birrell1989}: «Uso de un mutex:
+acceder a datos compartidos» y «Uso de una variable de condición: planificar
+recursos compartidos». Acceder y \emph{planificar} el acceso son dos
+problemas distintos con dos herramientas distintas, que es la misma
+distinción que el enunciado pide mantener y que nuestro diseño implementa al
+concentrar en \code{sync.c} la única capa que toca mutex y condvars
+(sección~\ref{sec:protocolo}).
+
+Sobre el predicado recomienda un patrón, \code{WHILE NOT expression DO
+Thread.Wait(m,c) END;}, que llama \emph{«un patrón general, que recomiendo
+enfáticamente para todos sus usos de variables de condición»}. Da dos
+razones. La primera es que \emph{«la semántica de \code{Signal} no garantiza
+que el hilo despertado sea el siguiente en tomar el mutex»}: otro consumidor
+puede interponerse, tomar el mutex, vaciar el recurso y soltarlo antes de
+que el despertado llegue a correr. La segunda es que su implementación
+permite que \code{Signal} despierte, raramente, a más de un hilo. Las dos
+están en el ciclo de \code{sync\_put}, y el comentario del código las nombra
+en el mismo orden.
+
+De ahí se sigue su política de señalización, que es la del protocolo de
+este proyecto (sección~\ref{sec:protocolo}): \code{Signal} \emph{«si uno
+sabe que a lo sumo un hilo puede despertarse con provecho»} y
+\code{Broadcast} cuando el recurso recién disponible \emph{«puede ser usado
+por varios otros hilos»}. En un punto nos apartamos a propósito: Birrell
+observa que \code{Broadcast} \emph{«permite ser menos cuidadoso al separar
+distintas razones de espera en distintas variables de condición»}, y acá se
+hizo lo contrario: la pausa del productor duerme en \code{closing} para no
+robarle señales a quien espera espacio de verdad
+(sección~\ref{sec:protocolo}).
+
+\subsection{Lo que el modelo de Birrell no cubre}
+
+Birrell escribe sobre hilos en un espacio de direcciones único, y menciona
+la alternativa solo para descartarla: \emph{«múltiples procesos separados,
+corriendo en espacios de direcciones separados. Esto suele ser costoso de
+montar, y los costos de comunicar entre espacios de direcciones son con
+frecuencia altos, incluso en presencia de segmentos compartidos»}. Ese
+«incluso en presencia de segmentos compartidos» describe exactamente la
+arquitectura que el enunciado exige, así
+que varias comodidades de su modelo no se heredan:
+
+\begin{itemize}
+\item \textbf{Nada de punteros en el estado compartido.} Donde Birrell
+      comparte variables globales, acá una dirección virtual de un proceso
+      no vale en otro: el buffer se indexa con enteros y desplazamientos
+      (sección~\ref{sec:arquitectura}).
+\item \textbf{Las primitivas hay que configurarlas y son objetos del
+      segmento.} Mutex y condvars viven dentro de la memoria compartida y
+      requieren \code{PTHREAD\_PROCESS\_SHARED}~\cite{POSIX2024}; alguien
+      las crea y alguien las destruye. De ahí el protocolo de cierre con un
+      finalizador único (sección~\ref{sec:protocolo}), que en un modelo de
+      hilos no existe porque el runtime libera todo al terminar el proceso.
+\item \textbf{Nadie limpia por uno.} Un hilo que muere se lleva su pila; un
+      proceso que muere deja su referencia tomada y el segmento con nombre
+      en el sistema. Un participante registrado que no se retira cuelga el
+      cierre ---el finalizador se queda esperando en \code{all\_left}, sin
+      plazo que lo libere---, y el objeto de \code{/dev/shm} sobrevive a
+      todos
+      los procesos: hay que borrarlo a mano. Es un límite asumido ---el
+      enunciado no pide recuperación ante caídas--- y documentado como tal,
+      no un defecto encontrado tarde.
+\end{itemize}
+
+El material del curso cubre el mismo recorrido: la clase~5 sobre exclusión
+mutua, semáforos y espera bloqueante, y la clase~7 sobre bloqueo, buffering
+y control de flujo~\cite{SanchezClases2026}.

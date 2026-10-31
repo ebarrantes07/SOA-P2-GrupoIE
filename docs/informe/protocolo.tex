@@ -6,8 +6,9 @@
 Se eligieron un mutex y variables de condición POSIX en lugar de semáforos:
 el cierre necesita despertar a \emph{todos} los bloqueados de una vez, algo
 que una variable de condición hace con \code{broadcast} y un semáforo solo
-logra fabricando permisos ficticios. Las cinco primitivas viven en el
-segmento, inicializadas con \code{PTHREAD\_PROCESS\_SHARED}, y cada una
+logra fabricando permisos ficticios. El argumento completo, con lo que la
+elección costó, está en la sección~\ref{sec:decisiones}. Las cinco
+primitivas viven en el segmento, inicializadas con \code{PTHREAD\_PROCESS\_SHARED}, y cada una
 tiene un papel distinto:
 
 \begin{itemize}
@@ -83,20 +84,12 @@ operaciones en pseudocódigo. Todo lo que está entre
 \textbf{efecto} señala la línea donde la operación pasa a ser visible para
 los demás procesos.
 
-El Algoritmo~\ref{alg:registro} usa \emph{CAS} (\emph{compare-and-swap}),
-una operación atómica del procesador que compara una variable con el valor
-que se leyó antes y, solo si siguen siendo iguales, la reemplaza por uno
-nuevo, todo en un único paso indivisible. Así,
-$\mathrm{CAS}(\mathit{refs}, v, v+1)$ significa: ``si
-$\mathit{refs}$ todavía vale $v$, que es lo que se leyó, cámbialo a $v+1$;
-si otro proceso lo modificó entretanto, no escribas nada e informa el
-fallo''. Ante un fallo, el proceso vuelve a leer y reintenta.
-De este modo dos procesos pueden incrementar \code{refs} a la vez sin
-perder ninguna cuenta, y ninguno lo incrementa si la puerta se cerró
-entre la lectura y la escritura.
-
-El registro de un participante ocurre en dos
-pasos, conexión y registro, que muestra el Algoritmo~\ref{alg:registro}.
+El registro de un participante ocurre en dos pasos, conexión y registro,
+que muestra el Algoritmo~\ref{alg:registro}. Su
+$\mathrm{CAS}(\mathit{refs}, v, v+1)$ incrementa el contador solo si
+\code{refs} todavía vale lo que se leyó, y reintenta si no: así dos procesos
+pueden entrar a la vez sin perder ninguna cuenta, y ninguno entra si la
+puerta se cerró entre la lectura y la escritura.
 
 \begin{algorithm}[H]
 \caption{Conexión y registro}
@@ -119,11 +112,6 @@ pasos, conexión y registro, que muestra el Algoritmo~\ref{alg:registro}.
 \STATE \code{unlock}(\code{mutex}); si hubo rechazo, \code{instance\_detach}
 \end{algorithmic}
 \end{algorithm}
-
-En pocas palabras, un proceso primero pide permiso para entrar a la
-instancia y solo después se anota como participante. Entrar le asegura
-que las primitivas seguirán vivas mientras las use; anotarse le asegura
-que su id es único.
 
 Las líneas 1--6 son la \emph{conexión}: el proceso mapea el segmento y toma
 una referencia en \code{refs} con CAS, sin el mutex, porque el mutex podría
@@ -158,10 +146,6 @@ contraparte. Se muestran en los Algoritmos~\ref{alg:put} y~\ref{alg:get}.
 \end{algorithmic}
 \end{algorithm}
 
-El productor espera a que haya lugar, confirma que la instancia sigue
-abierta, deja su mensaje con un número de orden global y avisa a un
-consumidor. Recién al soltar el mutex escribe su registro en el CSV.
-
 \begin{algorithm}[H]
 \caption{Extracción (\code{sync\_get})}
 \label{alg:get}
@@ -180,11 +164,6 @@ consumidor. Recién al soltar el mutex escribe su registro en el CSV.
 \STATE verificar la carga, escribir \code{GET} y procesar \COMMENT{fuera de la región crítica}
 \end{algorithmic}
 \end{algorithm}
-
-El consumidor hace el recorrido inverso: espera a que haya un mensaje,
-toma el más antiguo y avisa a un productor de que quedó una casilla
-libre. Si la instancia se está cerrando y ya no queda nada por extraer,
-se retira.
 
 En ambos algoritmos, las líneas 2--3 son la espera: \code{wait} suelta el mutex
 mientras el proceso duerme y lo recupera al despertar, y por eso el
@@ -239,9 +218,7 @@ El Algoritmo~\ref{alg:cierre} muestra el cierre completo que conduce el
 \end{algorithmic}
 \end{algorithm}
 
-Dicho de forma breve: el finalizador comprueba que puede cerrar, marca el
-corte y despierta a todos, espera a que cada proceso se vaya y solo
-entonces destruye lo que queda. En detalle, el cierre tiene cuatro fases:
+El cierre tiene cuatro fases:
 \begin{itemize}
   \item \textbf{Rechazos} (líneas 2--6): si ya hay un cierre en curso, o
   no hay consumidor y queda trabajo, el \code{finisher} se va sin

@@ -1,4 +1,104 @@
 \section{Discusión de decisiones de diseño}
 \label{sec:decisiones}
 
-\pendiente{Emmanuel, \#27: Al menos tres: tamaño del buffer, costo de los logs, granularidad del bloqueo, mecanismo de espera, equidad o complejidad del cierre. Cada una con la alternativa descartada y la evidencia (resultados o pruebas).}
+Las decisiones de este proyecto están registradas una por una ---con su
+contexto, las alternativas descartadas y la evidencia cuando la hubo--- en
+una bitácora versionada junto al código~\cite{Bitacora2026}. Esta sección
+discute tres de ellas, las que tenían una alternativa razonable que se
+descartó con evidencia y no por preferencia.
+
+\subsection{Primitivas: mutex y condiciones, no semáforos}
+
+\textbf{Decisión.} Un mutex y cuatro variables de condición POSIX
+configuradas para compartirse entre procesos. El enunciado permite las dos
+vías y deja la elección al grupo, así que esta es la decisión de la que
+cuelgan las dos siguientes.
+
+\textbf{Alternativa descartada.} Semáforos POSIX compartidos entre procesos,
+que es la construcción original de Dijkstra para este problema y necesita
+menos código: dos contadores, un binario de exclusión y ningún ciclo de
+predicado.
+
+\textbf{Evidencia.} Tres razones, ninguna de preferencia.
+
+\emph{Con semáforos hay un orden que interbloquea y hay que recordar no
+escribirlo}, el de las dos \code{P} del consumidor
+(sección~\ref{sec:lecturas}). Es justo lo que el enunciado prohíbe ---no
+esperar mientras se conserva el bloqueo que necesita quien puede satisfacer
+esa espera--- y con una variable de condición ese error no se puede
+escribir.
+
+\emph{El cierre no necesita permisos falsos.} Despertar a todos los
+bloqueados es un \code{broadcast} sobre las cuatro condvars, y lo que cada
+uno reevalúa al despertar es el estado real. Por la vía de los semáforos hay
+que publicar permisos que no corresponden a ningún mensaje ni a ningún
+espacio, y el propio enunciado pide entonces distinguirlos de los reales:
+una obligación que esta decisión elimina en vez de cumplir.
+
+\emph{La contabilidad queda en una sola variable.} Un \code{count} bajo un
+mutex permite evaluar los dos predicados sobre el mismo estado, lo que con
+dos semáforos no vale en todo instante (sección~\ref{sec:lecturas}).
+
+\textbf{Lo que costó.} Las primitivas dejan de ser objetos del sistema y
+pasan a vivir dentro del segmento, con \code{PTHREAD\_PROCESS\_SHARED} y un
+reloj explícito en las condvars; alguien tiene que crearlas y alguien
+destruirlas, que es de donde sale el protocolo de cierre con finalizador
+único. Un semáforo con nombre lo habría resuelto el sistema operativo. Ese
+es el precio que el proyecto paga por las tres razones de arriba.
+
+\subsection{Tamaño del buffer: no hay un valor por omisión razonable}
+
+\textbf{Decisión.} \code{--capacity} es obligatoria y no tiene valor por
+omisión: \code{creator} se niega a crear la instancia si no se la dan.
+
+\textbf{Alternativa descartada.} Darle un valor por omisión cómodo ---8,
+digamos--- para poder invocar \code{creator} sin pensar en la capacidad, que
+es lo que haría cualquiera que asuma que más espacio nunca estorba.
+
+\textbf{Evidencia.} Ese valor cómodo no existe
+(sección~\ref{sec:resultados}): subir la capacidad solo mejora el throughput
+cuando ninguno de los dos lados es el cuello de botella (+18\,\% en 5/5~ms,
+plano en 2/8~ms), mientras que la latencia sube siempre, hasta un factor de
+66. En régimen saturado la latencia ni siquiera es una medición: es la
+capacidad dividida por la tasa de drenaje. Cualquier valor por omisión
+habría sido bueno para una de las dos métricas y malo para la otra, y el
+programa no tiene forma de saber cuál le importa a quien lo corre.
+
+\textbf{Consecuencia práctica.} Elegir la capacidad es elegir un punto en un
+intercambio entre caudal y latencia, no una mejora gratuita, así que el
+programa obliga a elegirlo de forma explícita. Una simulación de eventos
+discretos del mismo escenario, sin mutex ni registro
+(\code{scripts/modelo.py}), agrega que el beneficio satura en seco: de
+capacidad~128 en adelante el throughput no gana nada, así que el 64 del
+barrido ya estaba en el plateau y probar capacidades mayores no habría
+aportado información.
+
+\subsection{Granularidad del bloqueo: un solo mutex, y la evidencia de que alcanza}
+
+\textbf{Decisión.} Un mutex por instancia, que protege el anillo, los
+contadores, las tablas de participantes y las métricas. \code{buffer.h}
+asume que ya está tomado.
+
+\textbf{Alternativa descartada.} Bloqueo más fino ---un candado para el
+anillo y otro para las métricas, o secciones críticas separadas por
+campo--- con el argumento de reducir contención.
+
+\textbf{Evidencia.} La contención no es el costo, así que el bloqueo fino
+optimizaría lo que no duele. Adquirir el mutex cuesta menos de
+1~\textmu s por operación en casi todas las celdas (0.24--0.63~\textmu s los
+productores, 0.35--1.7~\textmu s los consumidores), entre tres y cuatro
+órdenes de magnitud por debajo de las pausas y de las esperas por la
+contraparte. Dividir el mutex habría multiplicado los estados posibles y los
+órdenes de adquisición ---con el riesgo de interbloqueo que eso trae, el
+mismo que Dijkstra señala para el orden de las operaciones--- a cambio de un
+microsegundo.
+
+Lo que sí es caro quedó identificado al analizar los resultados, y no es el
+candado: despertar a un proceso dormido cuesta unos 60~\textmu s en este
+entorno (\code{cond\_signal}, el despacho del planificador y la
+readquisición del mutex), dos órdenes de magnitud más que tomar el mutex sin
+contención. En el escenario 8/2~ms, donde el consumidor se bloquea en 197 de
+cada 200 extracciones, eso es lo que domina la latencia media por mensaje.
+La conclusión para el diseño es la inversa de la intuición: conviene
+preocuparse por \emph{cuántas veces se duerme un proceso}, no por cuánto
+dura la sección crítica.
