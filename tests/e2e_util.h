@@ -9,6 +9,7 @@
 #define SOA_P2_E2E_UTIL_H
 
 #include "memory.h"
+#include "sync.h"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -104,7 +105,9 @@ static inline const char *e2e_name(const char *prefix, const char *tag) {
     return b;
 }
 
-/* Ruta en build/ (make test ya la creó), borrada al salir. */
+/* Ruta en build/ (make test ya la creó), borrada al salir. Borra también
+ * un archivo viejo con esa ruta: pedirla dos veces borra lo que se escribió
+ * entre medio, así que cada ruta se pide una sola vez y se guarda. */
 static inline const char *e2e_path(const char *prefix, const char *tag, const char *who) {
     if (e2e_n_files == (sig_atomic_t)(sizeof(e2e_files) / sizeof(e2e_files[0])))
         abort();
@@ -116,9 +119,11 @@ static inline const char *e2e_path(const char *prefix, const char *tag, const ch
 
 /* ---- Procesos --------------------------------------------------------- */
 
-/* Lanza exe con los argumentos dados (lista terminada en NULL). stdout va
- * a /dev/null; stderr a err_path, o a /dev/null si es NULL. */
-static inline pid_t e2e_spawnv(const char *err_path, const char *exe, va_list ap) {
+/* Lanza exe con los argumentos dados (lista terminada en NULL). stderr va
+ * a err_path (o a /dev/null si es NULL). stdout va a /dev/null, salvo con
+ * `both`, que manda las dos salidas a err_path: el finisher anuncia sus
+ * rechazos por stdout. */
+static inline pid_t e2e_spawnv(const char *err_path, bool both, const char *exe, va_list ap) {
     const char *argv[E2E_ARGV_MAX];
     int n = 0;
     argv[n++] = exe;
@@ -133,8 +138,9 @@ static inline pid_t e2e_spawnv(const char *err_path, const char *exe, va_list ap
     fflush(NULL);
     pid_t pid = fork();
     if (pid == 0) {
-        int out = open("/dev/null", O_WRONLY);
-        int err = err_path != NULL ? open(err_path, O_WRONLY | O_CREAT | O_TRUNC, 0644) : out;
+        int null = open("/dev/null", O_WRONLY);
+        int err = err_path != NULL ? open(err_path, O_WRONLY | O_CREAT | O_TRUNC, 0644) : null;
+        int out = both ? err : null;
         if (out != -1)
             dup2(out, STDOUT_FILENO);
         if (err != -1)
@@ -149,7 +155,16 @@ static inline pid_t e2e_spawnv(const char *err_path, const char *exe, va_list ap
 static inline pid_t e2e_spawn(const char *err_path, const char *exe, ...) {
     va_list ap;
     va_start(ap, exe);
-    pid_t pid = e2e_spawnv(err_path, exe, ap);
+    pid_t pid = e2e_spawnv(err_path, false, exe, ap);
+    va_end(ap);
+    return pid;
+}
+
+/* Como e2e_spawn, con stdout y stderr juntos en out_path. */
+static inline pid_t e2e_spawn_all(const char *out_path, const char *exe, ...) {
+    va_list ap;
+    va_start(ap, exe);
+    pid_t pid = e2e_spawnv(out_path, true, exe, ap);
     va_end(ap);
     return pid;
 }
@@ -179,28 +194,61 @@ static inline int e2e_wait(pid_t pid, int seconds) {
 static inline int e2e_run(const char *err_path, const char *exe, ...) {
     va_list ap;
     va_start(ap, exe);
-    pid_t pid = e2e_spawnv(err_path, exe, ap);
+    pid_t pid = e2e_spawnv(err_path, false, exe, ap);
     va_end(ap);
+    return e2e_wait(pid, 10);
+}
+
+/* Corre ./verify sobre n archivos (máximo 10 s) y devuelve su código. Su
+ * salida se descarta salvo que encuentre violaciones. */
+static inline int e2e_verify(const char *const *files, int n) {
+    if (n + 2 > E2E_ARGV_MAX * 4)
+        abort();
+    const char *argv[E2E_ARGV_MAX * 4];
+    argv[0] = "./verify";
+    for (int i = 0; i < n; i++)
+        argv[i + 1] = files[i];
+    argv[n + 1] = NULL;
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        int null = open("/dev/null", O_WRONLY);
+        if (null != -1)
+            dup2(null, STDOUT_FILENO);
+        execv(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    e2e_remember_child(pid);
     return e2e_wait(pid, 10);
 }
 
 /* ---- Archivos e instancias -------------------------------------------- */
 
-/* true si el archivo existe y contiene `needle`. Si no, muestra lo que
- * tenía, para que la falla se entienda sin volver a correr nada. */
-static inline bool e2e_file_has(const char *path, const char *needle) {
+/* true si el archivo existe y contiene `needle` (lee hasta 4 KiB). */
+static inline bool e2e_file_contains(const char *path, const char *needle) {
     char buf[4096];
     FILE *f = fopen(path, "r");
-    if (f == NULL) {
-        fprintf(stderr, "  no se pudo leer %s\n", path);
+    if (f == NULL)
         return false;
-    }
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
-    if (strstr(buf, needle) != NULL)
+    return strstr(buf, needle) != NULL;
+}
+
+/* Como e2e_file_contains, pero si falla muestra lo que tenía el archivo,
+ * para que la falla se entienda sin volver a correr nada. */
+static inline bool e2e_file_has(const char *path, const char *needle) {
+    if (e2e_file_contains(path, needle))
         return true;
-    fprintf(stderr, "  se esperaba \"%s\" en stderr y llego: %s\n", needle, buf);
+    char buf[1024] = "";
+    FILE *f = fopen(path, "r");
+    if (f != NULL) {
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        buf[n] = '\0';
+        fclose(f);
+    }
+    fprintf(stderr, "  se esperaba \"%s\" en %s y llego: %s\n", needle, path, buf);
     return false;
 }
 
@@ -216,6 +264,45 @@ static inline bool e2e_instance_exists(const char *name) {
         return false;
     memory_unmap(inst, len);
     return true;
+}
+
+/* Lo que las pruebas miran de una instancia viva, leído en una sola región
+ * crítica. memory_open no cuenta como conexión (no sube refs), así que el
+ * finisher no espera a quien la tiene mapeada así: solo se usa mientras la
+ * instancia existe, y se desmapea enseguida. */
+struct e2e_peek {
+    int      state;
+    uint32_t capacity, count, active_producers, active_consumers;
+    uint64_t enqueue_seq, dequeue_seq;
+};
+
+static inline bool e2e_peek(const char *name, struct e2e_peek *out) {
+    struct instance *inst;
+    size_t len;
+    if (memory_open(name, &inst, &len) != MEM_OK)
+        return false;
+    sync_lock(inst);
+    *out = (struct e2e_peek){
+        .state = inst->state, .capacity = inst->capacity, .count = inst->count,
+        .active_producers = inst->active_producers,
+        .active_consumers = inst->active_consumers,
+        .enqueue_seq = inst->enqueue_seq, .dequeue_seq = inst->dequeue_seq,
+    };
+    sync_unlock(inst);
+    memory_unmap(inst, len);
+    return true;
+}
+
+/* Espera hasta `seconds` a que la instancia cumpla pred. */
+static inline bool e2e_wait_for(const char *name, bool (*pred)(const struct e2e_peek *),
+                                int seconds) {
+    for (int i = 0; i < seconds * 100; i++) {
+        struct e2e_peek k;
+        if (e2e_peek(name, &k) && pred(&k))
+            return true;
+        e2e_sleep_ms(10);
+    }
+    return false;
 }
 
 #endif /* SOA_P2_E2E_UTIL_H */
