@@ -67,18 +67,24 @@ procesos por lado y pausas de media $m$, cada lado mueve $4000/m$ mensajes
 por segundo, y el sistema no puede ir más rápido que el mínimo de los dos.
 
 \begin{table}[!t]
-\caption{Throughput en msgs/s (media $\pm$ desviación entre 5 repeticiones)
-y porcentaje del techo teórico}
+\caption{Throughput (media $\pm$ desviación entre 5 repeticiones) y
+porcentaje del techo teórico, que vale 500, 800 y 500~msgs/s según el
+escenario}
 \label{tab:throughput}
 \centering
 \small
-\begin{tabular}{@{}cccc@{}}
+\begin{tabular}{@{}clll@{}}
 \toprule
-Capacidad & 2/8~ms (techo 500) & 5/5~ms (techo 800) & 8/2~ms (techo 500) \\
+Cap. & 2/8~ms & 5/5~ms & 8/2~ms \\
 \midrule
-1  & $488.1 \pm 14.7$ (98\,\%) & $611.4 \pm 7.2$ (76\,\%)  & $459.5 \pm 32.1$ (92\,\%) \\
-8  & $492.4 \pm 17.3$ (98\,\%) & $695.4 \pm 29.4$ (87\,\%) & $477.0 \pm 26.2$ (95\,\%) \\
-64 & $473.2 \pm 15.7$ (95\,\%) & $721.5 \pm 13.6$ (90\,\%) & $445.4 \pm 12.5$ (89\,\%) \\
+\multicolumn{4}{@{}l}{\emph{Throughput (msgs/s)}} \\
+1  & $488.1 \pm 14.7$ & $611.4 \pm 7.2$  & $459.5 \pm 32.1$ \\
+8  & $492.4 \pm 17.3$ & $695.4 \pm 29.4$ & $477.0 \pm 26.2$ \\
+64 & $473.2 \pm 15.7$ & $721.5 \pm 13.6$ & $445.4 \pm 12.5$ \\
+\multicolumn{4}{@{}l}{\emph{Porcentaje del techo}} \\
+1  & 98\,\% & 76\,\% & 92\,\% \\
+8  & 98\,\% & 87\,\% & 95\,\% \\
+64 & 95\,\% & 90\,\% & 89\,\% \\
 \bottomrule
 \end{tabular}
 \end{table}
