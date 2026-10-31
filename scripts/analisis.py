@@ -15,11 +15,17 @@ promedios por participante y las esperas como fraccion de la vida del
 proceso, que es la forma en que se pueden comparar corridas de distinta
 duracion.
 
+La excepcion es el percentil 95, que D11 ya preveia: el resumen lo trae
+aproximado por histograma y aca se recalcula exacto desde los CSV de los
+consumidores cuando estan disponibles (ver exact_p95_ms).
+
 Codigo de salida: 0 si el experimento era valido y el analisis se escribio,
 1 si alguna corrida no era usable o faltan datos.
 """
 import argparse
 import csv
+import glob
+import math
 import os
 import shutil
 import statistics
@@ -32,6 +38,7 @@ METRICS = [
     ("throughput",       "msgs/s", 1),
     ("latency_mean",     "ms",     2),
     ("latency_p95",      "ms",     2),
+    ("latency_p95_exact", "ms",    2),
     ("latency_max",      "ms",     2),
     ("wait_space",       "ms",     1),
     ("wait_data",        "ms",     1),
@@ -54,6 +61,11 @@ METRICS = [
     ("active_interval",  "s",      3),
     ("close_duration",   "ms",     3),
 ]
+
+# Metricas que pueden faltar segun los insumos disponibles. Se incluyen
+# solo si estan en TODAS las repeticiones de TODOS los grupos: una metrica
+# a medias daria una tabla con huecos y un agregado incomparable.
+OPTIONAL_METRICS = {"latency_p95_exact"}
 
 NS_PER_MS = 1e6
 NS_PER_US = 1e3
@@ -86,6 +98,47 @@ def summary_path(results_dir, run_id):
         if os.path.exists(candidate):
             return candidate
     die(f"no encuentro el resumen de {run_id} en {results_dir}")
+
+
+def exact_p95_ms(results_dir, run_id, consumers, expected):
+    """p95 exacto de la latencia, desde los GET de los consumidores (D11).
+
+    El resumen trae el p95 aproximado por histograma, con error <= 6.25 %
+    (D28). El error de la MEDIA es despreciable, pero la desviacion entre
+    repeticiones se puede perder entera: en capacidad 64 con pausas 2/8 las
+    cinco repeticiones caen en la misma cubeta (de 151 a 168 ms), las cinco
+    reportan su punto medio y la desviacion sale 0.00, que parece
+    repetibilidad perfecta y es solo el ancho de la cubeta. Los CSV de
+    eventos traen la latencia de cada mensaje, asi que aca se recalcula.
+
+    Devuelve None si los CSV de eventos no estan: D7 los excluye del
+    versionado, asi que el re-analisis desde results/seleccionados corre sin
+    ellos y ahi se reporta solo el aproximado.
+    """
+    paths = sorted(glob.glob(os.path.join(results_dir, run_id, "c*.csv")))
+    if len(paths) != consumers:
+        return None
+
+    lats = []
+    for path in paths:
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                if row["event"] == "GET":
+                    lats.append(int(row["t_ns"]) - int(row["enqueue_time_ns"]))
+
+    # check_run ya exigio extracted == expected, asi que tiene que haber una
+    # fila GET por mensaje. Si no, los CSV estan truncados y un p95 sobre un
+    # subconjunto seria un numero falso presentado como exacto.
+    if len(lats) != expected:
+        die(f"{run_id}: {len(lats)} filas GET en los CSV de consumidor, "
+            f"se esperaban {expected}")
+
+    lats.sort()
+    # Misma convencion que lat_hist_percentile_ns (D11): el valor en la
+    # posicion ceil(0.95 * n) contando desde 1. Asi el exacto y el
+    # aproximado son comparables fila a fila.
+    rank = max(1, math.ceil(0.95 * len(lats)))
+    return lats[rank - 1] / NS_PER_MS
 
 
 def read_summary(path):
@@ -170,9 +223,14 @@ def wait_fraction(participants, role, wait_metric):
     return 100.0 * waited / lived
 
 
-def run_metrics(instance, participants):
-    """Las metricas de una corrida, ya en unidades legibles."""
-    return {
+def run_metrics(instance, participants, p95_exact=None):
+    """Las metricas de una corrida, ya en unidades legibles.
+
+    `p95_exact` en ms, o None si los CSV de eventos no estaban (ver
+    exact_p95_ms): en ese caso la metrica no se emite, en vez de emitirse
+    con el valor aproximado bajo un nombre que promete exactitud.
+    """
+    metrics = {
         "throughput":      instance["throughput"],
         "latency_mean":    instance["latency_mean"] / NS_PER_MS,
         "latency_p95":     instance["latency_p95"] / NS_PER_MS,
@@ -203,6 +261,9 @@ def run_metrics(instance, participants):
         "active_interval": instance["active_interval"] / NS_PER_S,
         "close_duration":  instance["close_duration"] / NS_PER_MS,
     }
+    if p95_exact is not None:
+        metrics["latency_p95_exact"] = p95_exact
+    return metrics
 
 
 # ---- Agregacion ----------------------------------------------------------
@@ -216,12 +277,22 @@ def load(results_dir):
         problem = check_run(run, instance)
         if problem is not None:
             die(f"corrida {run['run_id']} no usable: {problem}")
+        expected = int(run["producers"]) * int(run["messages_per_producer"])
+        p95 = exact_p95_ms(results_dir, run["run_id"], int(run["consumers"]), expected)
         key = (int(run["capacity"]), int(run["mean_prod_ms"]), int(run["mean_cons_ms"]))
-        groups.setdefault(key, []).append(run_metrics(instance, participants))
+        groups.setdefault(key, []).append(
+            run_metrics(instance, participants, p95))
     return groups
 
 
-def aggregate(groups):
+def resolve_metrics(groups):
+    """METRICS sin las opcionales que no esten en todas las repeticiones."""
+    return [(name, unit, dec) for name, unit, dec in METRICS
+            if name not in OPTIONAL_METRICS
+            or all(name in rep for reps in groups.values() for rep in reps)]
+
+
+def aggregate(groups, metrics):
     """{(clave de grupo): {metrica: (media, desviacion, n)}}
 
     La desviacion es la muestral (n-1): las 5 repeticiones son una muestra
@@ -230,7 +301,7 @@ def aggregate(groups):
     out = {}
     for key, reps in sorted(groups.items()):
         stats = {}
-        for name, _unit, _dec in METRICS:
+        for name, _unit, _dec in metrics:
             values = [r[name] for r in reps]
             sd = statistics.stdev(values) if len(values) > 1 else 0.0
             stats[name] = (statistics.fmean(values), sd, len(values))
@@ -244,13 +315,13 @@ def scenario_label(mean_prod, mean_cons):
     return f"{mean_prod}/{mean_cons}"
 
 
-def print_tables(agg):
+def print_tables(agg, metrics):
     """Una tabla por metrica: capacidades en filas, escenarios en columnas."""
     capacities = sorted({k[0] for k in agg})
     scenarios = sorted({(k[1], k[2]) for k in agg})
-    n = max(agg[k][METRICS[0][0]][2] for k in agg)
+    n = max(agg[k][metrics[0][0]][2] for k in agg)
     print(f"Media +/- desviacion estandar entre {n} repeticiones\n")
-    for name, unit, dec in METRICS:
+    for name, unit, dec in metrics:
         print(f"{name} [{unit}]")
         head = "  cap |" + "".join(f"{'  prod/cons ' + scenario_label(*s):>22}" for s in scenarios)
         print(head)
@@ -263,7 +334,7 @@ def print_tables(agg):
         print()
 
 
-def write_csv(agg, out_dir):
+def write_csv(agg, metrics, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "agregados.csv")
     with open(path, "w", newline="") as f:
@@ -271,7 +342,7 @@ def write_csv(agg, out_dir):
         w.writerow(["capacity", "mean_prod_ms", "mean_cons_ms", "metric", "unit",
                     "mean", "sd", "n"])
         for (cap, mp, mc), stats in sorted(agg.items()):
-            for name, unit, _dec in METRICS:
+            for name, unit, _dec in metrics:
                 mean, sd, n = stats[name]
                 w.writerow([cap, mp, mc, name, unit, f"{mean:.6f}", f"{sd:.6f}", n])
     return path
@@ -306,9 +377,17 @@ def main():
                     help="copia manifiesto y resumenes a la carpeta de salida")
     args = ap.parse_args()
 
-    agg = aggregate(load(args.results))
-    print_tables(agg)
-    path = write_csv(agg, args.out)
+    groups = load(args.results)
+    metrics = resolve_metrics(groups)
+    agg = aggregate(groups, metrics)
+    print_tables(agg, metrics)
+    if any(name == "latency_p95_exact" for name, _u, _d in metrics):
+        print("percentil 95: exacto desde los CSV de los consumidores, y el\n"
+              "              aproximado por histograma en latency_p95")
+    else:
+        print("percentil 95: solo el aproximado por histograma (sin CSV de\n"
+              "              eventos en los insumos; ver D7)")
+    path = write_csv(agg, metrics, args.out)
     print(f"agregados: {path}")
     if args.archivar:
         count, dest = archive(args.results, args.out)

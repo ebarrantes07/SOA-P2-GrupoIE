@@ -95,8 +95,26 @@ El mismo límite acota al 5/5, donde el productor también es quien tiene cuota.
 | 8 | 15.99 ± 0.58 | 4.77 ± 0.82 | 0.08 ± 0.01 |
 | 64 | **128.05 ± 4.74** | 24.62 ± 23.81 | 0.06 ± 0.01 |
 
-Medias en ms; el percentil 95 y el máximo están en los agregados y en la figura
-`fig2_latencia.svg`, con eje logarítmico porque los valores cubren de 0.06 a 160 ms.
+Medias en ms. El **percentil 95**, recalculado exacto desde los CSV de los
+consumidores como pide D11 (`analisis.py`, métrica `latency_p95_exact`):
+
+| Capacidad | 2/8 ms | 5/5 ms | 8/2 ms |
+|---|---|---|---|
+| 1 | 5.95 ± 0.39 | 3.17 ± 0.27 | 0.17 ± 0.01 |
+| 8 | 26.55 ± 0.99 | 13.41 ± 1.44 | 0.18 ± 0.02 |
+| 64 | **160.52 ± 5.11** | 46.83 ± 33.26 | 0.13 ± 0.03 |
+
+Y el **máximo**:
+
+| Capacidad | 2/8 ms | 5/5 ms | 8/2 ms |
+|---|---|---|---|
+| 1 | 14.98 ± 2.78 | 8.38 ± 1.54 | 1.66 ± 0.49 |
+| 8 | 38.50 ± 1.92 | 21.83 ± 4.41 | 1.47 ± 0.40 |
+| 64 | 177.19 ± 9.60 | 56.73 ± 38.34 | 1.69 ± 0.93 |
+
+La media y el p95 se grafican en `fig2_latencia.svg`, con eje logarítmico porque los
+valores cubren de 0.06 a 160 ms. La figura dibuja el p95 aproximado del resumen, que
+difiere del exacto en menos del 1.5 % y es indistinguible en ese eje.
 
 **En 2/8 la latencia no es una medición, es una división.** La ley de Little
 (`ocupación = throughput × latencia`) permite recuperar cuán lleno estuvo el buffer,
@@ -468,10 +486,15 @@ instrumentación, que no está en el alcance del proyecto.
 
 ## 7. Qué no se puede concluir de estos datos
 
-- **El percentil 95 está cuantizado.** Lo aproxima un histograma con error ≤ 6.25 %
-  (D11), así que valores vecinos caen en el mismo cubo: en 2/8 con capacidad 64 las
-  5 repeticiones dieron **exactamente** 159.38 ms (desviación 0.00), que es un
-  artefacto del cubo, no una medición perfectamente repetible.
+- **El p95 del resumen del finisher está cuantizado; el de las tablas de arriba no.**
+  El resumen lo aproxima con un histograma de error ≤ 6.25 % (D11), y en 2/8 con
+  capacidad 64 las 5 repeticiones caen en la misma cubeta (de 151 a 168 ms): las
+  cinco reportan su punto medio, 159.38 ms, y la desviación sale **0.00**, que parece
+  repetibilidad perfecta y es solo el ancho de la cubeta. Las tablas de la sección 3.2
+  usan el p95 exacto recalculado desde los CSV de eventos, y esa celda da
+  **160.52 ± 5.11**. O sea que la media del histograma era buena (−0.7 %) y lo que
+  perdía era la desviación entera. Quien lea `latency_p95` de un resumen suelto, o del
+  agregado hecho sin los CSV de eventos, tiene que saberlo.
 - **Con capacidad grande y lados balanceados, la latencia es inestable.** En 5/5 con
   capacidad 64 las 5 repeticiones dieron 7.1, 7.7, 12.2, 33.6 y 62.5 ms de latencia
   media —un factor de 9— mientras el throughput se mantuvo entre 710 y 744. Cuánta
@@ -530,6 +553,10 @@ los resúmenes versionados en el repositorio:
 ```bash
 python3 scripts/analisis.py --results results/seleccionados
 ```
+
+Por ese camino el p95 sale **solo aproximado**: D7 excluye del versionado los CSV de
+eventos, que son los que permiten el cálculo exacto, y `analisis.py` lo dice en su
+salida en vez de cambiar el significado de la métrica en silencio.
 
 Las semillas se derivan de `--base-seed`, así que repetir el experimento con la
 misma base reproduce las mismas secuencias de pausas (D27).
