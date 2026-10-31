@@ -250,10 +250,13 @@ reproduce las mismas secuencias de pausas. Detalles en `docs/decisiones_diseno.m
 
 ## Gestión y trazabilidad
 
+Las cifras de esta sección son las del commit etiquetado `p2-entrega`; la tabla de abajo se
+regenera desde la API de GitHub al etiquetar.
+
 El trabajo se organizó en **32 Issues** con criterios de aceptación explícitos, 29 de ellos
-cerrados, y **32 Pull Requests** integrados —todos con al menos una revisión del otro
-integrante y 11 con dos— sobre **164 commits**. Los Issues abiertos son los de la entrega
-(#26, #27 y #28). De los 32 Issues, 19 quedaron a cargo de Emmanuel (uno traspasado de Isaac
+cerrados al momento de escribir esto, y **32 Pull Requests** integrados —todos con al menos una
+revisión del otro integrante y 11 con dos— sobre **166 commits**. Los Issues abiertos son los
+de la entrega (#26, #27 y #28). De los 32 Issues, 19 quedaron a cargo de Emmanuel (uno traspasado de Isaac
 durante el proyecto), 12 de Isaac y uno es conjunto.
 
 ### Cómo se estructuró el trabajo
