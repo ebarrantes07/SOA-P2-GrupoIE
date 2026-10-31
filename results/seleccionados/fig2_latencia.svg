@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="448" viewBox="0 0 820 448" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+  <rect width="820" height="448" fill="#fcfcfb"/>
+  <text x="70.0" y="28.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Latencia insercion a extraccion por capacidad</text>
+  <text x="70.0" y="46.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">circulo lleno: media; cuadro hueco: percentil 95 (aproximado por histograma, error &lt;= 6.25 %)</text>
+  <line x1="72.0" y1="340.0" x2="796.0" y2="340.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="343.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">0.03</text>
+  <line x1="72.0" y1="306.5" x2="796.0" y2="306.5" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="310.0" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">0.1</text>
+  <line x1="72.0" y1="276.0" x2="796.0" y2="276.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="279.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">0.3</text>
+  <line x1="72.0" y1="242.5" x2="796.0" y2="242.5" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="246.0" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">1</text>
+  <line x1="72.0" y1="212.0" x2="796.0" y2="212.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="215.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">3</text>
+  <line x1="72.0" y1="178.5" x2="796.0" y2="178.5" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="182.0" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">10</text>
+  <line x1="72.0" y1="148.0" x2="796.0" y2="148.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="151.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">30</text>
+  <line x1="72.0" y1="114.5" x2="796.0" y2="114.5" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="118.0" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">100</text>
+  <line x1="72.0" y1="84.0" x2="796.0" y2="84.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="87.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">300</text>
+  <text x="70.0" y="72.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">milisegundos (escala logaritmica)</text>
+  <line x1="72.0" y1="340.0" x2="796.0" y2="340.0" stroke="#b9b8b2" stroke-width="1"/>
+  <polyline points="178.7,193.1 420.0,151.7 661.3,101.6" fill="none" stroke="#2a78d6" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="5 4"/>
+  <polyline points="178.7,223.9 420.0,165.5 661.3,107.7" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+  <line x1="178.7" y1="223.9" x2="178.7" y2="193.1" stroke="#2a78d6" stroke-width="1"/>
+  <rect x="174.2" y="188.6" width="9.0" height="9.0" fill="#fcfcfb" stroke="#2a78d6" stroke-width="1.6"/>
+  <circle cx="178.7" cy="223.9" r="4.5" fill="#2a78d6"/>
+  <line x1="420.0" y1="165.5" x2="420.0" y2="151.7" stroke="#2a78d6" stroke-width="1"/>
+  <rect x="415.5" y="147.2" width="9.0" height="9.0" fill="#fcfcfb" stroke="#2a78d6" stroke-width="1.6"/>
+  <circle cx="420.0" cy="165.5" r="4.5" fill="#2a78d6"/>
+  <line x1="661.3" y1="107.7" x2="661.3" y2="101.6" stroke="#2a78d6" stroke-width="1"/>
+  <rect x="656.8" y="97.1" width="9.0" height="9.0" fill="#fcfcfb" stroke="#2a78d6" stroke-width="1.6"/>
+  <circle cx="661.3" cy="107.7" r="4.5" fill="#2a78d6"/>
+  <polyline points="192.7,210.5 434.0,170.1 675.3,136.0" fill="none" stroke="#eb6834" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="5 4"/>
+  <polyline points="192.7,249.6 434.0,199.1 675.3,153.5" fill="none" stroke="#eb6834" stroke-width="2" stroke-linecap="round"/>
+  <line x1="192.7" y1="249.6" x2="192.7" y2="210.5" stroke="#eb6834" stroke-width="1"/>
+  <rect x="188.2" y="206.0" width="9.0" height="9.0" fill="#fcfcfb" stroke="#eb6834" stroke-width="1.6"/>
+  <circle cx="192.7" cy="249.6" r="4.5" fill="#eb6834"/>
+  <line x1="434.0" y1="199.1" x2="434.0" y2="170.1" stroke="#eb6834" stroke-width="1"/>
+  <rect x="429.5" y="165.6" width="9.0" height="9.0" fill="#fcfcfb" stroke="#eb6834" stroke-width="1.6"/>
+  <circle cx="434.0" cy="199.1" r="4.5" fill="#eb6834"/>
+  <line x1="675.3" y1="153.5" x2="675.3" y2="136.0" stroke="#eb6834" stroke-width="1"/>
+  <rect x="670.8" y="131.5" width="9.0" height="9.0" fill="#fcfcfb" stroke="#eb6834" stroke-width="1.6"/>
+  <circle cx="675.3" cy="153.5" r="4.5" fill="#eb6834"/>
+  <polyline points="206.7,292.5 448.0,290.9 689.3,298.3" fill="none" stroke="#1baf7a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="5 4"/>
+  <polyline points="206.7,313.2 448.0,313.3 689.3,319.9" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linecap="round"/>
+  <line x1="206.7" y1="313.2" x2="206.7" y2="292.5" stroke="#1baf7a" stroke-width="1"/>
+  <rect x="202.2" y="288.0" width="9.0" height="9.0" fill="#fcfcfb" stroke="#1baf7a" stroke-width="1.6"/>
+  <circle cx="206.7" cy="313.2" r="4.5" fill="#1baf7a"/>
+  <line x1="448.0" y1="313.3" x2="448.0" y2="290.9" stroke="#1baf7a" stroke-width="1"/>
+  <rect x="443.5" y="286.4" width="9.0" height="9.0" fill="#fcfcfb" stroke="#1baf7a" stroke-width="1.6"/>
+  <circle cx="448.0" cy="313.3" r="4.5" fill="#1baf7a"/>
+  <line x1="689.3" y1="319.9" x2="689.3" y2="298.3" stroke="#1baf7a" stroke-width="1"/>
+  <rect x="684.8" y="293.8" width="9.0" height="9.0" fill="#fcfcfb" stroke="#1baf7a" stroke-width="1.6"/>
+  <circle cx="689.3" cy="319.9" r="4.5" fill="#1baf7a"/>
+  <text x="178.7" y="241.9" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">1.95</text>
+  <text x="661.3" y="125.7" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">128</text>
+  <text x="192.7" y="267.6" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0.77</text>
+  <text x="675.3" y="171.5" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">25</text>
+  <text x="206.7" y="331.2" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0.08</text>
+  <text x="689.3" y="337.9" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0.06</text>
+  <text x="192.7" y="360.0" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="normal">capacidad 1</text>
+  <text x="434.0" y="360.0" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="normal">capacidad 8</text>
+  <text x="675.3" y="360.0" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="normal">capacidad 64</text>
+  <rect x="72.0" y="390.0" width="10" height="10" rx="2" fill="#2a78d6"/>
+  <text x="87.0" y="398.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 2 ms / consumidor 8 ms</text>
+  <rect x="289.6" y="390.0" width="10" height="10" rx="2" fill="#eb6834"/>
+  <text x="304.6" y="398.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 5 ms / consumidor 5 ms</text>
+  <rect x="507.2" y="390.0" width="10" height="10" rx="2" fill="#1baf7a"/>
+  <text x="522.2" y="398.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 8 ms / consumidor 2 ms</text>
+  <circle cx="77.0" cy="422.0" r="4.5" fill="#52514e"/>
+  <text x="87.0" y="426.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">media</text>
+  <rect x="152.5" y="417.5" width="9.0" height="9.0" fill="#fcfcfb" stroke="#52514e" stroke-width="1.6"/>
+  <text x="167.0" y="426.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">percentil 95</text>
+</svg>

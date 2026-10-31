@@ -2898,6 +2898,208 @@ pasa con ASan y UBSan (198 pruebas).
 
 ---
 
+## D33 — Análisis del experimento: agregación, figuras y modelo de referencia
+
+- **Fecha:** 2026-10-30
+- **Issue:** [#25](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/25)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+> **Numeración:** D32 es del #19 (PR #57). D33 quedó reservada para esta
+> entrada desde el #22, que por eso tomó D34; el análisis y los cuatro
+> scripts citaban D32 y se renumeraron al mergearse el #57.
+
+### Contexto
+
+D27 dejó las 45 corridas y el manifiesto que las describe. El #25 pide
+cuatro cosas: media y desviación estándar entre repeticiones de throughput
+y latencia media, reportar también el percentil 95 y las esperas, al menos
+dos gráficas que comparen capacidades y escenarios, un texto que conteste
+si subir la capacidad mejora el rendimiento, solo acumula mensajes o
+desplaza la espera, y documentar el entorno y el efecto de los logs sobre
+la propia medición.
+
+El análisis vive en `docs/analisis_experimento.md`; esta entrada registra
+las decisiones metodológicas detrás de él y de los cuatro scripts que lo
+alimentan (`analisis.py`, `graficas.py`, `efecto_logs.py`, `modelo.py`).
+
+### Una corrida que no conserva mensajes no se promedia: se denuncia
+
+`analisis.py` aborta si alguna corrida tiene `status != ok`, `verify_rc !=
+0`, `invariant_ok = 0`, mensajes pendientes, o aceptados y extraídos
+distintos de lo que el manifiesto dice que se pidió. No se descarta la
+corrida mala y se sigue con las otras: se corta todo.
+
+El motivo es que el enunciado mide el rendimiento de un buffer *correcto*.
+Un promedio que incluya una corrida con pérdidas no es una medición
+degradada, es un número sin significado, y peor: uno que se vería
+perfectamente normal en la tabla. Si una corrida falla, lo que hay que
+arreglar es la corrida, no el promedio.
+
+### Promedios por participante, no razón de los totales
+
+Las métricas por operación (espera por inserción, duración de un bloqueo,
+porcentaje de operaciones bloqueadas, adquisición del mutex por operación)
+se calculan por participante y después se promedian entre participantes.
+
+Dividir los totales daría otro número: cada proceso tiene su propio
+contador de `ops`, así que la razón de los totales pondera más al que más
+trabajo hizo. Con cuatro productores de cuota fija la diferencia es chica,
+pero del lado del consumo no hay cuota y el reparto es desigual por
+diseño, así que ahí la elección importa.
+
+### Las esperas como fracción de la vida del proceso
+
+Los tiempos absolutos de espera no se pueden poner uno al lado del otro
+entre escenarios, porque las corridas no duran lo mismo: 2/8 y 8/2 tardan
+1.63-1.80 s y 5/5 1.11-1.31 s. La forma comparable es la espera acumulada
+del rol dividida por su propio tiempo de vida.
+
+Eso además hace legible el resultado central de la figura 3: las barras
+del 71-77 % no son una propiedad del diseño sino el cociente de las
+pausas, `1 − m_rápido/m_lento`, que para 2/8 y 8/2 da 75 % y para 5/5 da
+0 %. Todo lo que se mide en la columna balanceada es pérdida por
+acoplamiento.
+
+### Desviación muestral (n−1) y no poblacional
+
+Las 5 repeticiones son una muestra de las corridas posibles con esas
+semillas, no la población entera. Con n = 5 la diferencia entre dividir
+por 4 o por 5 es del 12 % en la desviación, suficiente para que importe
+cuál se declara. Se declara en el documento y en la salida del script.
+
+### El percentil 95 se recalcula exacto, no se toma del resumen
+
+D11 ya lo preveía: *"para el experimento el p95 exacto se calcula aparte
+desde los CSV de los consumidores"*. Quedó escrito y sin implementar;
+`analisis.py` leía el `latency_p95` del resumen del finisher, que es el
+aproximado por histograma con error ≤ 6.25 % (D28).
+
+La aproximación es buena para la **media** —entre −1.5 % y +0.9 % en las
+nueve celdas— pero puede perder la **desviación entera**. En 2/8 con
+capacidad 64 las cinco repeticiones caen en la misma cubeta (de 151 a 168
+ms), las cinco reportan su punto medio (159.38 ms) y la desviación sale
+0.00: parece repetibilidad perfecta y es solo el ancho de la cubeta. El
+exacto da 160.52 ± 5.11.
+
+`exact_p95_ms` lo recalcula desde las filas `GET` (`t_ns -
+enqueue_time_ns`, D12), con la misma convención de rango que
+`lat_hist_percentile_ns` para que el exacto y el aproximado sean
+comparables fila a fila. Tres decisiones alrededor:
+
+- **Métrica nueva (`latency_p95_exact`), no reemplazo.** `latency_p95`
+  queda intacta, así ninguna métrica cambia de significado según desde
+  dónde se corra el análisis, y `graficas.py` sigue leyendo la misma.
+- **Opcional y todo-o-nada.** D7 excluye del versionado los CSV de
+  eventos, así que el re-análisis desde `results/seleccionados` no los
+  tiene. Si faltan en alguna corrida la métrica no se emite para ninguna:
+  una métrica a medias daría una tabla con huecos y un agregado
+  incomparable. La salida dice siempre cuál de los dos caminos se usó, en
+  vez de cambiar el significado en silencio.
+- **Un CSV truncado aborta, no cae al aproximado.** La validación ya exigió
+  `extracted == expected`, así que faltar filas `GET` significa datos
+  incompletos; un p95 sobre un subconjunto sería un número falso
+  presentado como exacto.
+
+### Figuras: SVG a mano, y el color sigue al escenario
+
+`graficas.py` escribe los SVG línea por línea, sin librería de gráficos.
+El README declara que los scripts usan solo la biblioteca estándar, y tres
+figuras para un informe impreso no necesitan más.
+
+Decisiones de forma:
+
+- **El color codifica el escenario en las tres figuras**, nunca la
+  capacidad ni el rol. Así la clave se aprende una vez en la leyenda de la
+  figura 1 y sirve para las otras dos.
+- **Etiqueta numérica sobre cada barra**, no solo la altura: uno de los
+  tres colores de la terna no alcanza 3:1 de contraste sobre el fondo, así
+  que el color no puede ser el único portador del dato.
+- **Solo la punta de la barra va redondeada.** La punta es el dato; la base
+  queda a ras del eje para no sugerir que el cero es ambiguo.
+- **Eje logarítmico en la latencia**, porque los valores cubren de 0.06 a
+  160 ms. Con eje lineal las dos columnas rápidas serían una línea pegada
+  al piso.
+- **Media y p95 como series separadas** (círculo lleno y cuadro hueco),
+  unidas por un segmento en cada capacidad para que se vea la distancia
+  entre el promedio y la cola en ese punto. Los tres escenarios se
+  desplazan unos píxeles para que los marcadores no se tapen.
+- **Figura 3 como small multiples con la misma escala 0-100 %** en los dos
+  paneles, para que comparar la barra del productor con la del consumidor
+  sea una comparación válida y no una ilusión de escalas distintas.
+
+La figura 2 grafica el p95 aproximado del resumen y no el exacto: difiere
+en menos del 1.5 %, es indistinguible en ese eje, y su subtítulo lo
+declara.
+
+### El efecto de los logs se mide, no se supone (criterio 4)
+
+`efecto_logs.py` corre el mismo escenario con los CSV en un archivo y con
+los CSV a `/dev/null`, 7 repeticiones por celda, reutilizando la
+orquestación de `experimento.py` en vez de repetirla: lo único que cambia
+es el destino de `--log`.
+
+Dos regímenes porque uno solo no alcanzaba para concluir: con las pausas
+del experimento (5/5 ms) la diferencia es de 0.4 errores estándar, o sea
+no medible, porque la pausa de 5 ms por mensaje domina por tres órdenes de
+magnitud sobre escribir 206 bytes. Sin pausas, con 5000 mensajes por
+productor, sí se ve: 0.53 µs de tiempo de pared por mensaje, un 6 %.
+
+Lo que el A/B **no** aísla queda declarado: con `/dev/null` el logger
+sigue formateando cada fila con `snprintf` y sigue capturando los campos
+bajo el mutex. Compara la escritura al archivo, no la instrumentación
+entera.
+
+### Un modelo de referencia para separar el régimen de la implementación
+
+Una medición sola no distingue "esto lo causa el régimen
+productor-consumidor" de "esto lo causa nuestra implementación", y varias
+lecturas de las figuras caían justo en esa ambigüedad.
+
+`scripts/modelo.py` simula el mismo experimento por eventos discretos —4+4
+procesos, pausas exponenciales, buffer de capacidad C— **sin mutex, sin
+CSV y sin llamadas al sistema**: despertar a un proceso dormido es
+instantáneo. Lo que el modelo reproduce es del régimen; lo que le falta
+para llegar a lo medido es costo real. Modela dos detalles del sistema
+real porque cambian los números: la pausa del productor va antes de cada
+inserción, y el corte se pide cuando terminan todos los productores.
+
+Reproduce throughput y esperas en las nueve celdas y la latencia en seis,
+y de ahí salen cuatro conclusiones que la medición sola no sostenía:
+
+- **La columna 8/2 de la latencia no mide el buffer.** El modelo explica el
+  15 % de ella y su p95 es exactamente 0.000: el 95 % de los mensajes se
+  traspasa a un consumidor que ya estaba esperando. Lo que mide son los
+  ~60 µs de despertar al dormido, que no es el mutex (0.89-1.74 µs) sino
+  el cambio de contexto. En esa celda la media mide el scheduler y el
+  máximo mide el buffer.
+- **El techo `4000/m` no es alcanzable cuando lo fija el lado con cuota.**
+  La corrida no termina antes de que el más lento de los cuatro
+  productores ponga sus 200 mensajes, y el máximo de cuatro medias
+  muestrales cae ~7 % por encima de la media. El techo realista es
+  `(4000/m)/(1 + 1.03/√N)`. El 5-11 % que le falta al 8/2 no es costo de
+  sincronización.
+- **Subir la capacidad satura en seco, no converge.** El 5/5 gana +0.00
+  msgs/s de capacidad 128 a infinito: el buffer absorbe un paseo aleatorio
+  de excursión ~√N, y cuando la capacidad la supera las casillas extra no
+  se tocan nunca. Capacidad 64 ya estaba en el plateau, lo que responde
+  por qué el barrido se detuvo ahí.
+- **El déficit que queda decae con los mensajes como `1/√N`**, no
+  exponencialmente (ajuste `N^-0.45`). Reencuadrado así, los 721.5 msgs/s
+  medidos en 5/5 con capacidad 64 son el 97 % de lo alcanzable en una
+  corrida de 200 mensajes, no el 90 % de compararlos contra 800.
+
+El modelo también acota la advertencia de D28 sobre la espera del
+consumidor: la ventana entre su última extracción y el corte vale 0.23 %
+de su vida, o sea ~0.2 puntos de los 75 reportados, porque
+`experimento.py` lanza el finisher en cuanto terminan los productores.
+Con retardos mayores sí pesa: 50 ms tarde inflan 0.7 puntos, 200 ms inflan
+2.4 y 1 s infla 8.6.
+
+No es parte del entregable que pide el enunciado: es instrumento de
+análisis, corre en ~10 s y no depende del experimento.
+
+---
+
 ## D34 — Pruebas de cierre y carreras de ciclo de vida (`tests/test_closing.c`)
 
 - **Fecha:** 2026-10-30

@@ -1,0 +1,54 @@
+metric,role,id,value,unit,note
+accepted,instance,0,800,msgs,
+extracted,instance,0,800,msgs,
+pending,instance,0,0,msgs,
+rejected_puts,instance,0,0,count,intentos rechazados por el corte; no son aceptados
+invariant_ok,instance,0,1,bool,1 si accepted = extracted + pending y pending = 0
+latency_mean,instance,0,1926916.376250,ns,exacta
+latency_p95,instance,0,6029312,ns,aproximada por histograma; error <= 6.25 %
+latency_max,instance,0,15132232,ns,
+throughput,instance,0,496.410333,msgs_per_s,primer inicio de trabajador a ultima extraccion
+active_interval,instance,0,1611570000,ns,denominador del throughput
+close_duration,instance,0,858068,ns,de CLOSING a liberacion completa
+producers,instance,0,4,count,registros de por vida
+consumers,instance,0,4,count,registros de por vida
+ops,producer,2,200,msgs,aceptados
+wait_space,producer,2,1183628660,ns,espera por espacio en not_full; no incluye la pausa simulada
+wait_count,producer,2,192,count,
+lock_acquire,producer,2,48940,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,producer,2,1610195743,ns,
+ops,producer,1,200,msgs,aceptados
+wait_space,producer,1,1126964352,ns,espera por espacio en not_full; no incluye la pausa simulada
+wait_count,producer,1,186,count,
+lock_acquire,producer,1,49317,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,producer,1,1531217848,ns,
+ops,producer,3,200,msgs,aceptados
+wait_space,producer,3,1174741754,ns,espera por espacio en not_full; no incluye la pausa simulada
+wait_count,producer,3,195,count,
+lock_acquire,producer,3,167418,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,producer,3,1591868769,ns,
+ops,producer,4,200,msgs,aceptados
+wait_space,producer,4,1195202775,ns,espera por espacio en not_full; no incluye la pausa simulada
+wait_count,producer,4,194,count,
+lock_acquire,producer,4,154400,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,producer,4,1602174039,ns,
+ops,consumer,2,202,msgs,extraidos
+wait_data,consumer,2,28430879,ns,espera por datos en not_empty; incluye la espera final hasta el cierre
+wait_count,consumer,2,4,count,
+lock_acquire,consumer,2,129097,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,consumer,2,1635614412,ns,
+ops,consumer,1,208,msgs,extraidos
+wait_data,consumer,1,20697035,ns,espera por datos en not_empty; incluye la espera final hasta el cierre
+wait_count,consumer,1,9,count,
+lock_acquire,consumer,1,238625,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,consumer,1,1635188070,ns,
+ops,consumer,3,187,msgs,extraidos
+wait_data,consumer,3,18052702,ns,espera por datos en not_empty; incluye la espera final hasta el cierre
+wait_count,consumer,3,7,count,
+lock_acquire,consumer,3,377216,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,consumer,3,1635249714,ns,
+ops,consumer,4,203,msgs,extraidos
+wait_data,consumer,4,24096721,ns,espera por datos en not_empty; incluye la espera final hasta el cierre
+wait_count,consumer,4,7,count,
+lock_acquire,consumer,4,216947,ns,incluye la readquisicion al despertar de cond_wait
+lifetime,consumer,4,1634949256,ns,
