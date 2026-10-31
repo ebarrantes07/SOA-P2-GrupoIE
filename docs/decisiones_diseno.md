@@ -2437,9 +2437,9 @@ de presentarse como exclusiva de una. Va en la columna `note`:
 
 | Fila | Nota |
 |---|---|
-| `wait_data` (consumidor) | `espera por datos en not_empty; incluye la espera final hasta el cierre` |
-| `wait_space` (productor) | `espera por espacio en not_full; no incluye la pausa simulada` |
-| `lock_acquire` | `incluye la readquisicion al despertar de cond_wait` |
+| `wait_data` (consumidor) | `espera en not_empty con la readquisicion del mutex; incluye la espera final hasta el cierre` |
+| `wait_space` (productor) | `espera en not_full con la readquisicion del mutex; no incluye la pausa simulada` |
+| `lock_acquire` | `solo la adquisicion inicial del mutex; la readquisicion tras cond_wait va en wait_space` (productor) o `wait_data` (consumidor) |
 | `latency_p95` | `aproximada por histograma; error <= 6.25 %` |
 | `rejected_puts` | `intentos rechazados por el corte; no son aceptados` |
 
@@ -2470,6 +2470,36 @@ guardia, e `invariant_ok` fijo en 1.
 
 El manifiesto del experimento (D27) lee `accepted` y `extracted` por nombre
 de métrica, así que el formato nuevo le sirve sin cambios.
+
+### Corrección: dónde cae la readquisición del mutex (#61, 2026-10-31)
+
+La nota original de `lock_acquire` decía que incluía la readquisición al
+despertar de `cond_wait`. **No era cierto.** `sync_put` y `sync_get` miden
+`lock_ns` solo alrededor del `sync_lock` inicial, y cronometran la llamada
+a `pthread_cond_wait` entera dentro de `wait_ns`. Como `cond_wait` vuelve a
+tomar el mutex antes de retornar, ese tiempo cae en `wait_space` o
+`wait_data`, no en `lock_acquire`.
+
+Lo detectó el análisis del experimento (#25, D33). En la celda 8/2, el
+consumidor se bloquea en casi todas sus extracciones, y aun así
+`lock_acquire` vale de 1 a 2 µs por operación. Si el despertar, de unos
+60 µs, estuviera ahí, valdría unas 35 a 67 veces más.
+
+Se corrigieron las tres notas, como muestra la tabla de arriba:
+
+- **`lock_acquire`** dice que solo mide la adquisición inicial y a qué fila
+  va la readquisición.
+- **`wait_space` y `wait_data`** declaran que incluyen la readquisición.
+  Antes, ese costo no figuraba en ninguna nota.
+
+La prueba de `test_metrics` exigía que la nota contuviera la palabra
+`readquisicion`. Eso habría seguido pasando con cualquier texto, así que
+ahora la afirmación se verifica midiendo, dentro de la prueba existente
+`put_blocks_and_counts_the_wait` de `tests/test_sync.c`: el proceso que le
+hace lugar al productor bloqueado retiene el mutex 300 ms después del
+`signal`, y la prueba exige que esos 300 ms aparezcan en `wait_ns` y no en
+`lock_ns`. `test_metrics` queda comprobando que la nota de `lock_acquire`
+de cada rol remite a la fila de espera de ese mismo rol.
 
 ---
 
