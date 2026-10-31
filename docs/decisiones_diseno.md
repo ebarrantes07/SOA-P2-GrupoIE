@@ -3097,3 +3097,77 @@ Con retardos mayores sí pesa: 50 ms tarde inflan 0.7 puntos, 200 ms inflan
 
 No es parte del entregable que pide el enunciado: es instrumento de
 análisis, corre en ~10 s y no depende del experimento.
+
+---
+
+## D34 — Pruebas de cierre y carreras de ciclo de vida (`tests/test_closing.c`)
+
+- **Fecha:** 2026-10-30
+- **Issue:** [#22](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/22)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+- **Numeración:** D34 porque D33 queda reservada para el análisis del
+  experimento (#25), que Emmanuel ya referencia en su rama.
+
+### Contexto
+
+`test_finisher.c` (#17, #50, D26, D31) prueba el protocolo de cierre con
+participantes simulados dentro del proceso de prueba, que es lo que deja
+apuntar a una línea concreta (el `while` de `closing_wait_all_left`, la
+asignación de `STATE_CLOSED`). Lo que pide #22 es la otra mitad: los casos
+de cierre de la tabla de pruebas mínimas con los ejecutables que corre el
+usuario, `./creator`, `./producer`, `./consumer` y `./finisher`, y
+`./verify` sobre todos los CSV.
+
+### Casos
+
+| Caso | Escenario | Qué se exige |
+|---|---|---|
+| Cierre durante actividad | capacidad 1 y 4; un consumidor lento y tres productores sin cuota; se corta con el buffer lleno y los tres productores registrados | finisher, productores y consumidor salen con 0; la fila `CLOSING` tiene pendientes > 0; `verify` aprueba (todo lo aceptado se extrajo, nada se insertó después del corte); nombre liberado |
+| Cierre en vacío | tres consumidores dormidos en `not_empty` después de drenar | los tres terminan con 0 en menos de 2 s; `CLOSING` con 0 pendientes; `verify` aprueba |
+| Sin trabajadores | `creator` y `finisher`, nada más | cierre completo (`ALL_LEFT`, `CLOSED`, resumen) y el nombre se puede volver a crear |
+| Sin consumidor, productor activo | productor sin cuota bloqueado con el buffer lleno | el finisher sale con 1, sin resumen; la instancia sigue OPEN con los mismos contadores y el productor sigue vivo; al llegar un consumidor el cierre procede y `verify` aprueba todos los logs, el del rechazo incluido |
+| Sin consumidor, datos pendientes | 3 mensajes y ningún participante | igual que el anterior, y los 3 se extraen después |
+| Incorporaciones durante el cierre | un consumidor lento drena 64 pendientes (~1 s); mientras tanto llegan, cada 15 ms, productores, consumidores, finisher y creator con el mismo nombre | todos los tardíos salen con **1** (nunca por señal) con un mensaje del cierre; ninguno inserta ni extrae; ningún finisher tardío escribe resumen; al terminar, uno más encuentra el nombre libre; `verify` aprueba el conjunto, filas de rechazo incluidas |
+| Finalizadores concurrentes | 4 finisher a la vez sobre una instancia con productor y consumidor activos, 10 rondas | gana exactamente uno y los otros tres salen con 1, sin resumen; los trabajadores salen con 0; una instancia recreada con el mismo nombre sigue existiendo después |
+
+La regla de las carreras es la del issue: nadie usa un recurso destruido
+ni lo destruye dos veces. Las dos cosas tienen síntoma observable. Tomar un
+mutex destruido aborta el proceso por la política de D18, así que se exige
+código de salida 1 y no "distinto de cero". Un segundo `shm_unlink`
+tardío borraría la instancia recreada, así que se recrea y se comprueba que
+sigue ahí.
+
+### Cambios de apoyo
+
+- `tests/e2e_util.h` (D32) suma `e2e_spawn_all`, que junta `stdout` y
+  `stderr`, porque el finisher anuncia sus rechazos por `stdout`. También
+  suma `e2e_peek` / `e2e_wait_for`, que leen el estado de la instancia en
+  una sola región crítica (ahora también los usa `test_isolation.c`),
+  `e2e_verify` para una cantidad variable de CSV, y `e2e_file_contains`,
+  que no imprime nada cuando el texto no aparece.
+- `e2e_path` borra un archivo viejo con esa ruta. Pedir dos veces la misma
+  ruta borra lo que se escribió entre medio, así que cada ruta se pide una
+  sola vez. Pasó mientras se escribían estas pruebas y quedó anotado en el
+  propio header.
+
+### Validación
+
+En Docker: `make test` con 205 pruebas y 0 fallas, también con ASan y
+UBSan, sin segmentos en `/dev/shm`; `test_closing` corrió 15 veces
+seguidas sin fallas (~4 s cada vez), y un `SIGALRM` a mitad de la corrida no deja procesos ni segmentos. Mutaciones detectadas:
+
+| Mutación | Casos que fallan |
+|---|---|
+| `pthread_cond_signal` en vez de `broadcast` al cortar | durante actividad, en vacío |
+| cerrar sin exigir consumidor | los dos sin consumidor |
+| no rechazar un segundo `closing_begin` | finalizadores concurrentes |
+| el consumidor se va al ver CLOSING sin drenar | durante actividad, sin consumidor, incorporaciones, finalizadores |
+| `sync_put` acepta después del corte | durante actividad, sin consumidor, finalizadores |
+| `instance_attach` ignora la puerta cerrada | finalizadores concurrentes |
+
+La última solo la detecta el caso de finalizadores. Sin la puerta, un
+participante tardío que llega en CLOSING igual es rechazado al registrarse
+(`REG_NOT_OPEN`). El daño aparece cuando la conexión llega después de
+`closing_release`, con las primitivas ya destruidas, y eso es lo que
+provocan los finisher perdedores de cada ronda.
+
