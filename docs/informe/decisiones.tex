@@ -4,7 +4,7 @@
 Las decisiones de este proyecto están registradas una por una ---con su
 contexto, las alternativas descartadas y la evidencia cuando la hubo--- en
 una bitácora versionada junto al código~\cite{Bitacora2026}. Esta sección
-discute cuatro de ellas, las que tenían una alternativa razonable que se
+discute tres de ellas, las que tenían una alternativa razonable que se
 descartó con evidencia y no por preferencia.
 
 \subsection{Primitivas: mutex y condiciones, no semáforos}
@@ -12,7 +12,7 @@ descartó con evidencia y no por preferencia.
 \textbf{Decisión.} Un mutex y cuatro variables de condición POSIX
 configuradas para compartirse entre procesos. El enunciado permite las dos
 vías y deja la elección al grupo, así que esta es la decisión de la que
-cuelgan las tres siguientes.
+cuelgan las dos siguientes.
 
 \textbf{Alternativa descartada.} Semáforos POSIX compartidos entre procesos,
 que es la construcción original de Dijkstra para este problema y necesita
@@ -72,38 +72,6 @@ discretos del mismo escenario, sin mutex ni registro
 capacidad~128 en adelante el throughput no gana nada, así que el 64 del
 barrido ya estaba en el plateau y probar capacidades mayores no habría
 aportado información.
-
-\subsection{Mecanismo de espera: una condvar por causa}
-
-\textbf{Decisión.} Una variable de condición por causa de espera, y la
-pausa simulada del productor implementada como espera con plazo sobre
-\code{closing}.
-
-\textbf{Alternativa descartada.} Dormir la pausa con \code{nanosleep}, que
-es lo obvio para «esperar \code{N} milisegundos»; y, una vez elegida la
-condvar, reusar \code{not\_full} en vez de agregar una cuarta.
-
-\textbf{Evidencia.} Las dos alternativas fallan por razones distintas y
-concretas. Un \code{nanosleep} no se interrumpe: un productor en pausa de
-300~ms no se enteraría del corte hasta terminarla, y el cierre tendría que
-esperarlo. Con \code{pthread\_cond\_timedwait} sobre \code{closing}, el
-\code{broadcast} del corte lo despierta de inmediato y se retira sin
-insertar.
-
-Reusar \code{not\_full} es peor de lo que parece: el que duerme su pausa ahí
-\emph{roba} un \code{signal} destinado a un productor que de verdad está
-bloqueado por falta de espacio, y ese productor queda dormido una vuelta más
-sin motivo. Es exactamente el caso donde Birrell recomienda separar causas
-de espera (sección~\ref{sec:lecturas}).
-
-Esta decisión hizo visible un error que vale como advertencia:
-\code{pthread\_cond\_timedwait} compara el plazo contra el reloj con que se
-configuró la condvar, así que mezclar
-\code{CLOCK\_MONOTONIC} en el plazo con el reloj por omisión en la condvar
-le pasa un instante de los años setenta y devuelve \code{ETIMEDOUT} de
-inmediato. La pausa desaparecía sin un solo error ---medido: 0~ms en vez de
-300--- porque \code{ETIMEDOUT} es justamente el código del fin normal. Las
-dos decisiones cuelgan del mismo macro para que no puedan desalinearse.
 
 \subsection{Granularidad del bloqueo: un solo mutex, y la evidencia de que alcanza}
 

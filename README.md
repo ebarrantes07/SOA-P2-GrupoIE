@@ -294,6 +294,14 @@ lo medido son 0.89 a 1.74 µs— y se corrigió la nota junto con la prueba que 
 (#61). Lo detectó el cruce de la documentación con el código, no una prueba, que habría pasado
 igual.
 
+Otra encontró un error que no producía ninguna falla visible. La pausa simulada del productor
+se implementó como espera con plazo, y el plazo se calculaba contra `CLOCK_MONOTONIC` mientras
+la variable de condición seguía con el reloj por omisión; `pthread_cond_timedwait` comparaba
+entonces un instante de los años setenta y devolvía `ETIMEDOUT` de inmediato. La pausa
+desaparecía —0 ms medidos en vez de 300— sin un solo error, porque `ETIMEDOUT` es también el
+código del fin normal de la pausa. Las dos decisiones cuelgan ahora del mismo macro para que no
+puedan desalinearse.
+
 Dos incidentes del flujo quedaron en el historial en vez de borrarse: un Pull Request integrado
 contra la rama equivocada, que dejó su trabajo fuera de `main` y hubo que rehacerlo contra
 ella, y una colisión de numeración en la bitácora cuando dos ramas reclamaron la misma entrada

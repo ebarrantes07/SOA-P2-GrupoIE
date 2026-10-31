@@ -98,7 +98,9 @@ sabe que a lo sumo un hilo puede despertarse con provecho»} y
 por varios otros hilos»}. En un punto nos apartamos a propósito: Birrell
 observa que \code{Broadcast} \emph{«permite ser menos cuidadoso al separar
 distintas razones de espera en distintas variables de condición»}, y acá se
-hizo lo contrario por una razón medida (sección~\ref{sec:decisiones}).
+hizo lo contrario: la pausa del productor duerme en \code{closing} para no
+robarle señales a quien espera espacio de verdad
+(sección~\ref{sec:protocolo}).
 
 \subsection{Lo que el modelo de Birrell no cubre}
 
