@@ -19,37 +19,11 @@
 
 #define P(tag, who) e2e_path("t19i", (tag), (who))
 
-/* Lee bajo el mutex los campos que interesan. memory_open no cuenta como
- * conexión (no sube refs), así que esto solo se hace mientras la instancia
- * está viva: el finisher no espera a quien la tiene mapeada así. */
-struct peek {
-    int state;
-    uint32_t capacity, active_producers, active_consumers;
-    uint64_t enqueue_seq, dequeue_seq;
-};
-
-static bool peek(const char *name, struct peek *out) {
-    struct instance *inst;
-    size_t len;
-    if (memory_open(name, &inst, &len) != MEM_OK)
-        return false;
-    sync_lock(inst);
-    *out = (struct peek){
-        .state = inst->state, .capacity = inst->capacity,
-        .active_producers = inst->active_producers,
-        .active_consumers = inst->active_consumers,
-        .enqueue_seq = inst->enqueue_seq, .dequeue_seq = inst->dequeue_seq,
-    };
-    sync_unlock(inst);
-    memory_unmap(inst, len);
-    return true;
-}
-
 /* Espera hasta 5 s a que haya p productores y c consumidores activos. */
 static bool wait_active(const char *name, uint32_t p, uint32_t c) {
     for (int i = 0; i < 500; i++) {
-        struct peek k;
-        if (peek(name, &k) && k.active_producers == p && k.active_consumers == c)
+        struct e2e_peek k;
+        if (e2e_peek(name, &k) && k.active_producers == p && k.active_consumers == c)
             return true;
         e2e_sleep_ms(10);
     }
@@ -87,10 +61,10 @@ static bool test_two_names_do_not_interfere(void) {
                          "--seed", "21", "--log", b_p, NULL);
     CHECK(e2e_wait(ap1, 15) == 0 && e2e_wait(ap2, 15) == 0);
 
-    struct peek ka, kb1, kb2;
-    CHECK(peek(a, &ka));
+    struct e2e_peek ka, kb1, kb2;
+    CHECK(e2e_peek(a, &ka));
     CHECK(ka.capacity == 4 && ka.enqueue_seq == 600);   /* nada de B entró en A */
-    CHECK(peek(b, &kb1));
+    CHECK(e2e_peek(b, &kb1));
     CHECK(kb1.capacity == 16 && kb1.active_producers == 1);
 
     /* Cerrar A no toca a B: B sigue OPEN, con sus dos procesos vivos, y
@@ -99,7 +73,7 @@ static bool test_two_names_do_not_interfere(void) {
     CHECK(e2e_wait(ac, 10) == 0);
     CHECK(!e2e_instance_exists(a));
     e2e_sleep_ms(200);
-    CHECK(peek(b, &kb2));
+    CHECK(e2e_peek(b, &kb2));
     CHECK(kb2.state == STATE_OPEN);
     CHECK(kb2.active_producers == 1 && kb2.active_consumers == 1);
     CHECK(kb2.enqueue_seq > kb1.enqueue_seq);
@@ -128,8 +102,8 @@ static bool test_duplicate_creation_rejected(void) {
     CHECK(wait_active(name, 0, 1));
     CHECK(e2e_run(NULL, "./producer", "--name", name, "--id", "1", "--mean-ms", "0", "--seed", "1",
                   "--messages", "50", "--log", p, NULL) == 0);
-    struct peek before, after;
-    CHECK(peek(name, &before));
+    struct e2e_peek before, after;
+    CHECK(e2e_peek(name, &before));
 
     /* Otra capacidad, la misma, y la mínima: siempre "ya existe". */
     const char *caps[] = { "8", "4", "1" };
@@ -139,7 +113,7 @@ static bool test_duplicate_creation_rejected(void) {
     }
 
     /* La existente sigue igual y operando. */
-    CHECK(peek(name, &after));
+    CHECK(e2e_peek(name, &after));
     CHECK(after.capacity == 4 && after.state == STATE_OPEN);
     CHECK(after.active_consumers == 1);
     CHECK(after.enqueue_seq == before.enqueue_seq && after.dequeue_seq == before.dequeue_seq);
@@ -178,8 +152,8 @@ static bool test_concurrent_creators_one_wins(void) {
                     round, ok, rejected);
             return false;
         }
-        struct peek k;
-        CHECK(peek(name, &k));
+        struct e2e_peek k;
+        CHECK(e2e_peek(name, &k));
         CHECK(k.state == STATE_OPEN && k.capacity >= 1 && k.capacity <= N);
         CHECK(memory_unlink(name) == 0);
     }
@@ -195,8 +169,8 @@ static bool one_life(const char *name, const char *capacity, const char *tag,
     const char *c = P(tag, "c1.csv"), *p = P(tag, "p1.csv");
     const char *f = P(tag, "f.csv"), *s = P(tag, "s.csv");
     CHECK(e2e_run(NULL, "./creator", "--name", name, "--capacity", capacity, NULL) == 0);
-    struct peek k;
-    CHECK(peek(name, &k));
+    struct e2e_peek k;
+    CHECK(e2e_peek(name, &k));
     CHECK(k.capacity == (uint32_t)strtoul(capacity, NULL, 10));
     CHECK(k.enqueue_seq == 0 && k.dequeue_seq == 0);      /* arranca de cero */
 
