@@ -88,7 +88,7 @@ predicado de espera de cada una declarado, y un cierre ordenado en el que un
 finalizador único corta la admisión, drena lo pendiente, espera las retiradas
 y recién entonces libera los recursos. La verificación combina las pruebas
 mínimas del enunciado, bajo AddressSanitizer y UndefinedBehaviorSanitizer,
-con un oráculo que cruza los registros de todos los procesos y comprueba
+con un verificador que cruza los registros de todos los procesos y comprueba
 conservación, unicidad, integridad y orden FIFO. Un experimento de 45
 corridas muestra que aumentar la capacidad del buffer no es una mejora sino
 un intercambio: eleva el caudal solo cuando ningún lado es el cuello de

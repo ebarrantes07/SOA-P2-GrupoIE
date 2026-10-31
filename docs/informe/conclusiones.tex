@@ -3,7 +3,7 @@
 
 \textbf{El protocolo cumple las garantías que el enunciado pide, y la
 evidencia es de dos clases independientes.} La primera son los invariantes
-comprobados en cada corrida por un oráculo externo a la implementación:
+comprobados en cada corrida por un verificador externo a la implementación:
 conservación, unicidad, integridad del contenido y orden FIFO sobre los
 registros cruzados de todos los procesos, sin una sola violación en las
 pruebas mínimas ni en las 45 corridas del experimento. La segunda son las
@@ -11,7 +11,7 @@ pruebas automáticas, que incluyen intercalados difíciles de provocar a
 mano ---cierre en plena actividad, incorporaciones durante el cierre, cuatro
 finalizadores compitiendo--- y que corren además bajo
 AddressSanitizer y UndefinedBehaviorSanitizer sin reportes. Las dos clases
-son necesarias: los sanitizers no buscan carreras, y el oráculo no detecta
+son necesarias: los sanitizers no buscan carreras, y el verificador no detecta
 errores de memoria.
 
 \textbf{Subir la capacidad del buffer no es una mejora, es un intercambio.}

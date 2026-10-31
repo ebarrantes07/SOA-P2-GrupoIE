@@ -17,8 +17,9 @@ Este proyecto implementa ese sistema sobre memoria compartida POSIX. Un
 consumidores independientes se conectan, se registran, trabajan y se
 retiran; un \code{finisher} ejecuta un cierre ordenado que drena lo
 pendiente, espera a que todos se retiren y libera los recursos. Un quinto
-ejecutable, \code{verify}, cruza los registros de todos los procesos y actúa
-como oráculo de corrección. La ejecución ocurre en una sola máquina
+ejecutable, \code{verify}, cruza los registros de todos los procesos y
+comprueba la corrección de la corrida. La ejecución ocurre en una sola
+máquina
 GNU/Linux y no cubre la caída arbitraria de un proceso: las garantías se
 aplican a participantes que siguen el protocolo y a un cierre normal. Esa
 frontera no es una omisión cómoda, y la sección de pruebas documenta qué
@@ -27,7 +28,7 @@ ocurre exactamente cuando se cruza.
 El informe sigue el orden en que se construyó el sistema: primero el
 segmento compartido y qué dato es privado de cada proceso, después el
 protocolo de registro, inserción, extracción y cierre en pseudocódigo, con
-sus invariantes y sus puntos de efecto, y luego las pruebas y el oráculo que
-las respalda. Sobre esa base vienen el experimento, la relación con Dijkstra
+sus invariantes y sus puntos de efecto, y luego las pruebas y el verificador
+que las respalda. Sobre esa base vienen el experimento, la relación con Dijkstra
 y Birrell, las cuatro decisiones de diseño donde había una alternativa
 razonable que se descartó con evidencia, y la trazabilidad del trabajo.
