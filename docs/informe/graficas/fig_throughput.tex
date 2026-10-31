@@ -1,0 +1,23 @@
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[experimento, xmode=log, log basis x=2,
+    ylabel={Throughput (msgs/s)},
+    ymin=380, ymax=840,
+    legend style={at={(0.5,1.03)}, anchor=south}, legend columns=3]
+  \addplot[e28] table[x=cap, y=e28, y error=e28sd] {graficas/throughput.dat};
+  \addlegendentry{2/8 ms}
+  \addplot[e55] table[x=cap, y=e55, y error=e55sd] {graficas/throughput.dat};
+  \addlegendentry{5/5 ms}
+  \addplot[e82] table[x=cap, y=e82, y error=e82sd] {graficas/throughput.dat};
+  \addlegendentry{8/2 ms}
+  % Techo teórico: la tasa del lado más lento, 4000/m msgs/s.
+  \addplot[esc55, dashed, thin, forget plot] coordinates {(0.7,800) (90,800)};
+  \addplot[black!50, dashed, thin, forget plot] coordinates {(0.7,500) (90,500)};
+\end{axis}
+\end{tikzpicture}
+\caption{Throughput por capacidad y escenario (media de pausa productor/consumidor),
+media $\pm$ desviación estándar entre 5 repeticiones. En línea discontinua, el techo
+teórico de cada escenario: 500 msgs/s en 2/8 y 8/2, 800 msgs/s en 5/5.}
+\label{fig:throughput}
+\end{figure}

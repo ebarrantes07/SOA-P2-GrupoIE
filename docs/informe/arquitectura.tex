@@ -1,0 +1,4 @@
+\section{Arquitectura y representación de memoria}
+\label{sec:arquitectura}
+
+\pendiente{Isaac, \#26: Los cinco ejecutables y sus módulos (memoria, buffer, sincronización, participantes, métricas). Figura del segmento: qué es compartido (\code{struct instance}: magic, versión, capacidad, mutex y cuatro condvars, \code{refs}, estado, índices, secuencias, tablas de participantes, métricas, \code{messages[]}) y qué es privado de cada proceso (RNG, logger, contadores locales). Nombres de recursos (un objeto \code{/dev/shm/<nombre>}; las primitivas viven dentro). Publicación sin estructuras a medias (magic con release/acquire). Valores e índices, no punteros. Tabla de propiedad de recursos (quién crea y quién destruye). Fuentes: D1, D2, D8, D9, D13, D22, D29.}

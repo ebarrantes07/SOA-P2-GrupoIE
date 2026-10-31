@@ -1,0 +1,30 @@
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{groupplot}[experimento, xmode=log, log basis x=2,
+    group style={group size=2 by 1, horizontal sep=0.9cm, y descriptions at=edge left},
+    width=0.56\linewidth, height=4.4cm,
+    ymin=-5, ymax=100, xlabel={Capacidad}]
+  \nextgroupplot[title={\footnotesize Productores},
+                 ylabel={\% del tiempo de vida},
+                 legend to name=leyendaesperas, legend columns=3]
+  \addplot[e28] table[x=cap, y=e28, y error=e28sd] {graficas/espera_productor.dat};
+  \addlegendentry{2/8 ms}
+  \addplot[e55] table[x=cap, y=e55, y error=e55sd] {graficas/espera_productor.dat};
+  \addlegendentry{5/5 ms}
+  \addplot[e82] table[x=cap, y=e82, y error=e82sd] {graficas/espera_productor.dat};
+  \addlegendentry{8/2 ms}
+  \nextgroupplot[title={\footnotesize Consumidores}]
+  \addplot[e28] table[x=cap, y=e28, y error=e28sd] {graficas/espera_consumidor.dat};
+  \addplot[e55] table[x=cap, y=e55, y error=e55sd] {graficas/espera_consumidor.dat};
+  \addplot[e82] table[x=cap, y=e82, y error=e82sd] {graficas/espera_consumidor.dat};
+\end{groupplot}
+\end{tikzpicture}
+
+\ref{leyendaesperas}
+\caption{Fracción del tiempo de vida que cada rol pasa bloqueado (productores
+esperando espacio, consumidores esperando datos), media $\pm$
+desviación estándar entre repeticiones. La espera del consumidor incluye la
+espera final hasta el cierre.}
+\label{fig:esperas}
+\end{figure}

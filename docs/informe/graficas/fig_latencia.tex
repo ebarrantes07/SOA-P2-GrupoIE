@@ -1,0 +1,23 @@
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[experimento, xmode=log, log basis x=2,
+    ymode=log, ylabel={Latencia (ms)},
+    ymin=0.03, ymax=400,
+    legend style={at={(0.5,1.03)}, anchor=south}, legend columns=3]
+  \addplot[e28] table[x=cap, y=e28, y error=e28sd] {graficas/latencia_media.dat};
+  \addlegendentry{2/8 ms}
+  \addplot[e55] table[x=cap, y=e55, y error=e55sd] {graficas/latencia_media.dat};
+  \addlegendentry{5/5 ms}
+  \addplot[e82] table[x=cap, y=e82, y error=e82sd] {graficas/latencia_media.dat};
+  \addlegendentry{8/2 ms}
+  \addplot[e28, dashed, mark options={solid}, forget plot] table[x=cap, y=e28] {graficas/latencia_p95.dat};
+  \addplot[e55, dashed, mark options={solid}, forget plot] table[x=cap, y=e55] {graficas/latencia_p95.dat};
+  \addplot[e82, dashed, mark options={solid}, forget plot] table[x=cap, y=e82] {graficas/latencia_p95.dat};
+\end{axis}
+\end{tikzpicture}
+\caption{Latencia de inserción a extracción, en escala logarítmica. Línea continua:
+media $\pm$ desviación estándar entre repeticiones; discontinua: percentil 95
+exacto, calculado desde los CSV de los consumidores.}
+\label{fig:latencia}
+\end{figure}
