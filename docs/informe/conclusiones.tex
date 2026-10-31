@@ -1,45 +1,26 @@
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-\textbf{El protocolo cumple las garantías que el enunciado pide, y la
-evidencia es de dos clases independientes.} La primera son los invariantes
-comprobados en cada corrida por un verificador externo a la implementación:
-conservación, unicidad, integridad del contenido y orden FIFO sobre los
-registros cruzados de todos los procesos, sin una sola violación en las
-pruebas mínimas ni en las 45 corridas del experimento. La segunda son las
-pruebas automáticas, que incluyen intercalados difíciles de provocar a
-mano ---cierre en plena actividad, incorporaciones durante el cierre, cuatro
-finalizadores compitiendo--- y que corren además bajo
-AddressSanitizer y UndefinedBehaviorSanitizer sin reportes. Las dos clases
-son necesarias: los sanitizers no buscan carreras, y el verificador no detecta
-errores de memoria.
+El protocolo cumple las garantías que el enunciado pide, y lo sostienen dos
+clases independientes de evidencia: un verificador externo a la
+implementación, que no halló violaciones de conservación, unicidad,
+integridad ni FIFO en ninguna corrida, y una suite con intercalados
+difíciles de provocar a mano ---cierre en plena actividad, incorporaciones
+durante el cierre, cuatro finalizadores compitiendo--- bajo sanitizers sin
+reportes. Las dos son necesarias: los sanitizers no buscan carreras y el
+verificador no detecta errores de memoria.
 
-\textbf{Subir la capacidad del buffer no es una mejora, es un intercambio.}
-Es el resultado central del experimento y el menos intuitivo. La capacidad
-solo aumenta el caudal cuando ninguno de los dos lados es el cuello de
-botella: un 18~\% más entre capacidad~1 y~64 con tasas equilibradas, y nada
-medible cuando un lado domina. La latencia, en cambio, sube siempre, hasta
-un factor de 66. Y en régimen saturado deja de ser una medición del
-protocolo para volverse aritmética: la capacidad dividida por la tasa de
-drenaje. Un modelo de simulación del mismo escenario confirma que el
-beneficio satura en seco, de modo que ninguna capacidad mayor a las
-probadas habría cambiado la conclusión.
+Del experimento, el resultado central es que subir la capacidad del buffer
+no es una mejora sino un intercambio: aumenta el caudal solo cuando ninguno
+de los dos lados es el cuello de botella, mientras la latencia sube siempre
+y, en régimen saturado, deja de medir el protocolo para volverse la
+capacidad dividida por la tasa de drenaje.
 
-\textbf{La frontera entre lo que garantiza el algoritmo y lo que concede el
-sistema operativo es nítida, y conviene no confundirlas.} El algoritmo
-garantiza exclusión, conservación, orden y terminación; el sistema decide
-\emph{quién} de los que esperan avanza y \emph{cuándo}
-(sección~\ref{sec:protocolo}). Los datos lo muestran: en el escenario donde
-el consumo es rápido, la latencia media no mide ocupación del buffer sino el
-camino de despertar del planificador, y el modelo de simulación ---que no
-tiene planificador--- explica apenas una fracción de ella. Ninguna propiedad
-de corrección del proyecto depende de esa frontera, pero varios números sí.
-
-\textbf{Los límites están declarados, no escondidos.} No hay recuperación
-ante la caída arbitraria de un proceso: un participante registrado que muere
-sin retirarse deja al finalizador esperando sin plazo y el objeto con nombre
-hay que borrarlo a mano. No hay herramienta que busque carreras entre
-procesos separados sobre memoria compartida, así que lo que sostiene la
-ausencia de carreras son los invariantes y las pruebas de intercalados, no
-los sanitizers. Y las mediciones vienen de un binario sin optimizar sobre un
-hipervisor, lo que hace comparables los valores entre sí pero no absolutos.
+Y queda nítida la frontera entre lo que garantiza el algoritmo ---exclusión,
+conservación, orden y terminación--- y lo que concede el sistema operativo,
+que decide quién de los que esperan avanza y cuándo. Ninguna propiedad de
+corrección depende de esa frontera, pero varios números sí. El alcance
+tampoco se amplía al final: no hay recuperación ante la caída arbitraria de
+un proceso, no existe herramienta que busque carreras entre procesos
+separados sobre memoria compartida, y las mediciones vienen de un binario
+sin optimizar sobre un hipervisor.
