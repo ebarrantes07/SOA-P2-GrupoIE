@@ -80,59 +80,25 @@ distinción que el enunciado pide mantener y que nuestro diseño implementa al
 concentrar en \code{sync.c} la única capa que toca mutex y condvars
 (sección~\ref{sec:protocolo}).
 
-Sobre el predicado, Birrell recomienda un patrón y lo escribe así:
+Sobre el predicado recomienda un patrón, \code{WHILE NOT expression DO
+Thread.Wait(m,c) END;}, que llama \emph{«un patrón general, que recomiendo
+enfáticamente para todos sus usos de variables de condición»}. Da dos
+razones. La primera es que \emph{«la semántica de \code{Signal} no garantiza
+que el hilo despertado sea el siguiente en tomar el mutex»}: otro consumidor
+puede interponerse, tomar el mutex, vaciar el recurso y soltarlo antes de
+que el despertado llegue a correr. La segunda es que su implementación
+permite que \code{Signal} despierte, raramente, a más de un hilo. Las dos
+están en el ciclo de \code{sync\_put}, y el comentario del código las nombra
+en el mismo orden.
 
-\begin{quote}
-\code{WHILE NOT expression DO Thread.Wait(m,c) END;}
-\end{quote}
-
-y lo llama \emph{«un patrón general, que recomiendo enfáticamente para todos
-sus usos de variables de condición»}. Da dos razones. La primera es que
-\emph{«la semántica de \code{Signal} no garantiza que el hilo despertado sea
-el siguiente en tomar el mutex»}: otro consumidor puede interponerse,
-tomar el mutex, vaciar el recurso y soltarlo antes de que el despertado
-llegue a correr. La segunda es que su implementación permite que
-\code{Signal} despierte, raramente, a más de un hilo.
-
-Las dos razones están en el ciclo de \code{sync\_put}, y el comentario del
-código las nombra en el mismo orden:
-
-\begin{quote}\small
-\code{/* Ciclo while y no if: cond\_wait puede despertar de forma espuria, y
-ademas otro productor puede haber vuelto a llenar el buffer entre el signal
-y nuestra readquisicion del mutex. */}
-\end{quote}
-
-Birrell agrega el argumento que más vale para un trabajo que se revisa de a
-dos: el patrón permite \emph{«verificar la corrección por inspección local,
-que siempre es preferible a la inspección global»}. Con el \code{while},
-leer las cinco líneas de \code{sync\_get} basta para saber que al salir del
-ciclo hay
-un mensaje; con un \code{if} habría que auditar todos los puntos que
-señalizan la condvar.
-
-De ahí se sigue su política de señalización: \code{Signal} sirve \emph{«si
-uno sabe que a lo sumo un hilo puede despertarse con provecho»}, y
-\code{Broadcast} cuando \emph{«uno realmente necesita despertar varios
-hilos, porque el recurso que acaba de poner disponible puede ser usado por
-varios otros hilos»}. Es literalmente el criterio de nuestro protocolo
-(sección~\ref{sec:protocolo}):
-una inserción libera un dato y despierta con \code{signal} a un consumidor;
-una extracción libera una casilla y despierta a un productor; el corte a
-\code{CLOSING} vuelve falso el predicado de \emph{todos} los que esperan,
-así que va \code{broadcast} sobre las cuatro condvars.
-
-En un punto nos apartamos de él a propósito. Birrell observa que
-\code{Broadcast} \emph{«permite ser menos cuidadoso al separar distintas
-razones de espera en distintas variables de condición»}. Nosotros
-elegimos lo contrario: separar las causas de espera en cuatro condvars
-(\code{not\_full}, \code{not\_empty}, \code{closing}, \code{all\_left}) y
-usar \code{signal} donde alcanza. El motivo es que la pausa simulada del
-productor duerme en \code{closing} y no en \code{not\_full}, porque ahí
-robaría un \code{signal} destinado a un productor que de verdad espera
-espacio. Birrell ofrece el intercambio ---simplicidad contra
-rendimiento--- y el proyecto toma el otro lado, con la espera medida por
-participante para justificarlo (sección~\ref{sec:resultados}).
+De ahí se sigue su política de señalización, que es la del protocolo de
+este proyecto (sección~\ref{sec:protocolo}): \code{Signal} \emph{«si uno
+sabe que a lo sumo un hilo puede despertarse con provecho»} y
+\code{Broadcast} cuando el recurso recién disponible \emph{«puede ser usado
+por varios otros hilos»}. En un punto nos apartamos a propósito: Birrell
+observa que \code{Broadcast} \emph{«permite ser menos cuidadoso al separar
+distintas razones de espera en distintas variables de condición»}, y acá se
+hizo lo contrario por una razón medida (sección~\ref{sec:decisiones}).
 
 \subsection{Lo que el modelo de Birrell no cubre}
 
@@ -165,9 +131,6 @@ que varias comodidades de su modelo no se heredan:
       los procesos: hay que borrarlo a mano. Es un límite asumido ---el
       enunciado no pide recuperación ante caídas--- y documentado como tal,
       no un defecto encontrado tarde.
-\item \textbf{Las herramientas no cruzan la frontera.} ThreadSanitizer
-      instrumenta hilos de un proceso, así que no sirve acá
-      (sección~\ref{sec:pruebas}).
 \end{itemize}
 
 El material del curso cubre el mismo recorrido: la clase~5 sobre exclusión
