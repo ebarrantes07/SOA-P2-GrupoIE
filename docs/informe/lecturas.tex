@@ -3,18 +3,15 @@
 
 \subsection{Dijkstra: permisos, capacidad y orden}
 
-Dijkstra introduce los semáforos y las operaciones \code{P} y \code{V} en la
-sección~3.2 de \emph{Cooperating Sequential Processes}~\cite{Dijkstra1965},
-donde define \code{P} como la operación que decrementa su semáforo
-\emph{«tan pronto como el valor resultante sea no negativo»}, y distingue
-entre semáforos binarios y generales. La sección~3.3 los aplica al problema
-de exclusión mutua con un semáforo binario, y la sección~4.3 construye el
-buffer acotado con dos semáforos generales: el de porciones encoladas que
-ya aparecía en la sección~4.1 ---«número de porciones en cola»,
-\emph{number of queuing portions}--- y el que agrega el caso acotado para el
-espacio libre ---«número de posiciones vacías», \emph{number of empty
-positions}---. La simetría la resume en una frase: \emph{«el consumidor
-produce y el productor consume posiciones vacías en el buffer»}.
+Dijkstra introduce los semáforos y las operaciones \code{P} y
+\code{V}~\cite{Dijkstra1965}, y define \code{P} como la operación que
+decrementa su semáforo \emph{«tan pronto como el valor resultante sea no
+negativo»}. Los aplica primero a la exclusión mutua, con un semáforo
+binario, y después construye el buffer acotado con dos semáforos generales:
+el «número de porciones en cola» y, para el espacio libre que agrega el caso
+acotado, el «número de posiciones vacías». La simetría la resume en una
+frase: \emph{«el consumidor produce y el productor consume posiciones vacías
+en el buffer»}.
 
 Esa formulación trata la capacidad como un \emph{stock de permisos}. Las
 posiciones vacías no son un número que se consulta, son fichas que se
@@ -29,21 +26,20 @@ comprueba al final de cada corrida (sección~\ref{sec:pruebas}) es
 exactamente la conservación de permisos de Dijkstra, escrita sobre los CSV
 en vez de sobre semáforos.
 
-Dijkstra también muestra, en la sección~4.1, que el buffer acotado con
-varios productores o varios consumidores necesita \emph{además} un semáforo
-binario de exclusión, que él llama «manipulación del buffer»
-(\emph{buffer manipulation}): los dos contadores regulan la disponibilidad,
-pero no impiden que dos productores
-se mezclen al escribir. Es la misma separación de responsabilidades que
-nuestro diseño hace explícita con un mutex y cuatro variables de condición:
+Dijkstra también muestra que el buffer acotado con varios productores o
+varios consumidores necesita \emph{además} un semáforo binario de exclusión,
+que él llama «manipulación del buffer»: los dos contadores regulan la
+disponibilidad, pero no impiden que dos productores se mezclen al escribir.
+Es la misma separación de responsabilidades que nuestro diseño hace explícita
+con un mutex y cuatro variables de condición:
 los contadores dicen \emph{cuándo} se puede, el mutex dice \emph{quién} está
 adentro.
 
-Y advierte que el orden importa. En la sección~4.1 pide al lector
-convencerse de que \emph{«el orden de las dos operaciones V en el productor
-es indiferente»} pero \emph{«el orden de las dos operaciones P en el
-consumidor es esencial»}. Dijkstra no explica por qué, pero la razón es la
-que hace interesante la comparación con nuestro mecanismo: si el consumidor
+Y advierte que el orden importa: pide al lector convencerse de que \emph{«el
+orden de las dos operaciones V en el productor es indiferente»} pero
+\emph{«el orden de las dos operaciones P en el consumidor es esencial»}.
+Dijkstra no explica por qué, pero la razón es la que hace interesante la
+comparación con nuestro mecanismo: si el consumidor
 tomara primero el semáforo de exclusión y después el de datos, se quedaría
 dormido esperando datos \emph{con la exclusión en la mano}, y ningún
 productor podría entrar a producirlos. El interbloqueo no está en ninguna de
@@ -63,12 +59,10 @@ proyecto no reimplementa el buffer con semáforos.
 
 La separación entre exclusión y coordinación está ya en los títulos de las
 dos secciones centrales de Birrell~\cite{Birrell1989}: «Uso de un mutex:
-acceder a datos compartidos» (\emph{Using a Mutex: accessing shared data})
-y «Uso de una variable de condición: planificar recursos compartidos»
-(\emph{Using a Condition variable: scheduling shared resources}). Acceder y
-\emph{planificar} el acceso son dos problemas distintos con dos herramientas
-distintas, que es la misma distinción que el enunciado pide mantener y que
-nuestro diseño implementa al
+acceder a datos compartidos» y «Uso de una variable de condición: planificar
+recursos compartidos». Acceder y \emph{planificar} el acceso son dos
+problemas distintos con dos herramientas distintas, que es la misma
+distinción que el enunciado pide mantener y que nuestro diseño implementa al
 concentrar en \code{sync.c} la única capa que toca mutex y condvars
 (sección~\ref{sec:protocolo}).
 
@@ -98,18 +92,17 @@ y nuestra readquisicion del mutex. */}
 Birrell agrega el argumento que más vale para un trabajo que se revisa de a
 dos: el patrón permite \emph{«verificar la corrección por inspección local,
 que siempre es preferible a la inspección global»}. Con el \code{while},
-leer las
-cinco líneas de \code{sync\_get} basta para saber que al salir del ciclo hay
+leer las cinco líneas de \code{sync\_get} basta para saber que al salir del
+ciclo hay
 un mensaje; con un \code{if} habría que auditar todos los puntos que
 señalizan la condvar.
 
-De ahí se sigue su política de señalización, en la subsección
-«Uso de \code{Broadcast}» (\emph{Using ``Broadcast''}): \code{Signal} sirve
-\emph{«si uno sabe que a lo sumo un hilo puede despertarse con provecho»}, y
+De ahí se sigue su política de señalización: \code{Signal} sirve \emph{«si
+uno sabe que a lo sumo un hilo puede despertarse con provecho»}, y
 \code{Broadcast} cuando \emph{«uno realmente necesita despertar varios
 hilos, porque el recurso que acaba de poner disponible puede ser usado por
-varios otros hilos»}. Es
-literalmente el criterio de nuestro protocolo (sección~\ref{sec:protocolo}):
+varios otros hilos»}. Es literalmente el criterio de nuestro protocolo
+(sección~\ref{sec:protocolo}):
 una inserción libera un dato y despierta con \code{signal} a un consumidor;
 una extracción libera una casilla y despierta a un productor; el corte a
 \code{CLOSING} vuelve falso el predicado de \emph{todos} los que esperan,
