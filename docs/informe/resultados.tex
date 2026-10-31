@@ -52,15 +52,24 @@ siendo el mismo binario en todas las corridas, las comparaciones valen. Y
 los \textbf{9 procesos de una corrida caben de sobra en 16 CPU}, así que
 ningún resultado está explicado por falta de procesador.
 
-El código medido es el commit \code{6720836}. Después de la medición,
-\code{src/logger.c} cambió para tomar un candado de escritura al abrir el
-CSV en vez de truncar a ciegas ---una prueba de aislamiento mostró que dos
-procesos apuntados al mismo archivo se lo truncaban entre sí---, y
-\code{src/producer.c} cambió una línea de mensaje de error. Ninguno de los
-dos toca el camino por
-mensaje: el cuerpo de \code{csv\_logger\_write} es idéntico, así que lo
-medido sigue describiendo el código entregado salvo por el costo de apertura
-de cada proceso, que se paga una vez.
+El experimento se corrió sobre el commit \code{6720836}, que era el estado
+final del código en ese momento: el cierre de la verificación contra el
+enunciado. Una revisión posterior encontró un defecto en la apertura de los
+CSV ---un participante rechazado con el mismo \code{--log} que otro en curso
+le vaciaba el archivo--- y el arreglo hizo que \code{csv\_logger\_open} tome
+un candado de escritura antes de truncar. Son cinco archivos: \code{logger.c}
+y \code{logger.h}, más la misma línea de mensaje de error en los tres
+ejecutables que abren un CSV.
+
+Nada de eso afecta lo medido, y es comprobable con un diff. Los módulos del
+camino por mensaje ---\code{sync.c}, \code{buffer.c},
+\code{participants.c}, \code{metrics.c}, \code{payload.c} y
+\code{memory.c}--- son idénticos byte a byte entre el commit medido y el
+entregado, igual que el cuerpo de \code{csv\_logger\_write} y que el script
+del experimento. Lo único que cambió corre una vez por proceso, al abrir el
+CSV, antes del primer mensaje. Las 45 corridas no se repitieron sobre el
+código entregado, pero la diferencia entre los dos no está en ninguna ruta
+que el experimento mida.
 
 \subsection{Throughput}
 
