@@ -16,30 +16,18 @@ un valor «suficientemente grande».
 con el argumento intuitivo de que más espacio nunca estorba.
 
 \textbf{Evidencia.} Estorba, y se puede cuantificar
-(sección~\ref{sec:resultados}). Subir la capacidad solo mejora el
-rendimiento cuando ninguno de los dos lados es el cuello de botella: con
-pausas 5/5~ms el throughput pasa de 611 a 722~msgs/s (+18\,\%), pero con
-pausas 2/8~ms se queda plano (488, 492, 473) porque el consumidor ya corre
-al 98\,\% de su techo con una sola casilla. Lo que la capacidad sí cambia
-siempre es la latencia: en 2/8~ms la media pasa de 1.95 a 128.05~ms, un
-factor de 66. Y en régimen saturado esa latencia no es una medición sino una
-división: con el buffer lleno al 94--98\,\% de su capacidad --- recuperado
-por la ley de Little~\cite{Little1961} --- un mensaje tarda
-\emph{capacidad / tasa de drenaje}, lo que predice 2.05, 16.25 y 135.26~ms
-contra los tres valores medidos.
-
-El mecanismo es que un proceso solo puede bloquearse cuando el buffer está
-en un borde: con capacidad~1 la zona intermedia no existe (los únicos
-niveles posibles son 0 y 1, y 1 \emph{es} el estado lleno), y con
-capacidad~64 el nivel pasa el 81.8\,\% del tiempo donde nadie puede
-bloquearse. El buffer no acelera a nadie, absorbe varianza, y solo hay
-varianza que absorber si los dos lados están balanceados.
+(sección~\ref{sec:resultados}): subirla solo mejora el throughput cuando
+ninguno de los dos lados es el cuello de botella (+18\,\% en 5/5~ms, plano
+en 2/8~ms), mientras que la latencia sube siempre, hasta un factor de 66. En
+régimen saturado la latencia ni siquiera es una medición: es la capacidad
+dividida por la tasa de drenaje.
 
 \textbf{Consecuencia práctica.} Elegir la capacidad es elegir un punto en un
-intercambio entre caudal y latencia, no una mejora gratuita. El modelo de
-referencia (D33) muestra además que el beneficio satura en seco: de
-capacidad~128 en adelante el throughput no gana nada, así que 64 ya estaba
-en el plateau.
+intercambio entre caudal y latencia, no una mejora gratuita, y el punto
+conveniente depende de para qué sirva el sistema. El modelo de referencia
+(D33) agrega que el beneficio satura en seco: de capacidad~128 en adelante el
+throughput no gana nada, así que el 64 del barrido ya estaba en el plateau y
+probar capacidades mayores no habría aportado información.
 
 \subsection{Costo de los logs: medido antes de confiar en las mediciones}
 
