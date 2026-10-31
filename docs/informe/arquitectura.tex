@@ -3,12 +3,9 @@
 
 \subsection{Ejecutables y módulos}
 
-La compilación produce los cuatro ejecutables del enunciado
-(\code{creator}, \code{producer}, \code{consumer} y \code{finisher}) y un
-quinto, \code{verify}, que cruza los CSV de una corrida
-(Sección~\ref{sec:pruebas}). Cada productor y consumidor es un proceso
-independiente que solo conoce el nombre de la instancia. El código común se
-divide en los cinco módulos que pide el enunciado y unos pocos de apoyo:
+Cada productor y consumidor es un proceso independiente que solo conoce el
+nombre de la instancia. El código común se divide en los cinco módulos que
+pide el enunciado y unos pocos de apoyo:
 
 \begin{itemize}
   \item \textbf{Memoria} (\code{memory.c}): crea, valida, mapea y elimina

@@ -4,7 +4,7 @@
 Las decisiones de este proyecto están registradas una por una ---con su
 contexto, las alternativas descartadas y la evidencia cuando la hubo--- en
 una bitácora versionada junto al código~\cite{Bitacora2026}. Esta sección
-discute cinco de ellas, las que tenían una alternativa razonable que se
+discute cuatro de ellas, las que tenían una alternativa razonable que se
 descartó con evidencia y no por preferencia.
 
 \subsection{Primitivas: mutex y condiciones, no semáforos}
@@ -22,13 +22,11 @@ predicado.
 \textbf{Evidencia.} Tres razones, ninguna de preferencia.
 
 \emph{Con semáforos hay un orden que interbloquea y hay que recordar no
-escribirlo.} Dijkstra advierte que el orden de las dos \code{P} del
-consumidor es esencial (sección~\ref{sec:lecturas}): tomar primero la
-exclusión y después los datos deja al consumidor dormido \emph{con la
-exclusión en la mano}. Es justo lo que el enunciado prohíbe ---no esperar
-mientras se conserva el bloqueo que necesita quien puede satisfacer esa
-espera--- y con \code{pthread\_cond\_wait}, que suelta el mutex y lo retoma
-de forma atómica, ese error no se puede escribir.
+escribirlo}, el de las dos \code{P} del consumidor
+(sección~\ref{sec:lecturas}). Es justo lo que el enunciado prohíbe ---no
+esperar mientras se conserva el bloqueo que necesita quien puede satisfacer
+esa espera--- y con una variable de condición ese error no se puede
+escribir.
 
 \emph{El cierre no necesita permisos falsos.} Despertar a todos los
 bloqueados es un \code{broadcast} sobre las cuatro condvars, y lo que cada
@@ -38,9 +36,8 @@ espacio, y el propio enunciado pide entonces distinguirlos de los reales:
 una obligación que esta decisión elimina en vez de cumplir.
 
 \emph{La contabilidad queda en una sola variable.} Un \code{count} bajo un
-mutex permite evaluar los dos predicados sobre el mismo estado; con dos
-semáforos su suma no es un invariante instantáneo mientras haya operaciones
-en curso (sección~\ref{sec:lecturas}).
+mutex permite evaluar los dos predicados sobre el mismo estado, lo que con
+dos semáforos no vale en todo instante (sección~\ref{sec:lecturas}).
 
 \textbf{Lo que costó.} Las primitivas dejan de ser objetos del sistema y
 pasan a vivir dentro del segmento, con \code{PTHREAD\_PROCESS\_SHARED} y un
@@ -76,37 +73,11 @@ capacidad~128 en adelante el throughput no gana nada, así que el 64 del
 barrido ya estaba en el plateau y probar capacidades mayores no habría
 aportado información.
 
-\subsection{Costo de los logs: medido antes de confiar en las mediciones}
-
-\textbf{Decisión.} Cada proceso escribe su propio CSV, los campos del evento
-se capturan bajo el mutex y la escritura ocurre \emph{afuera} de la región
-crítica.
-
-\textbf{Alternativa descartada.} Escribir desde la región crítica, que es
-más simple porque no hace falta la estructura intermedia; o un archivo de
-log común a todos los procesos, que ahorra el cruce posterior.
-
-\textbf{Evidencia.} La instrumentación podría contaminar justo lo que mide,
-así que se midió con un A/B: la misma corrida con los CSV en un archivo y
-con los CSV a \code{/dev/null}, siete repeticiones por celda. En el régimen
-del experimento (pausas 5/5~ms) la diferencia es de 0.4 errores estándar,
-o sea \textbf{no medible}: la pausa de 5~ms por mensaje domina por tres
-órdenes de magnitud sobre escribir unos 200~bytes. El costo existe y se ve
-solo cuando se quitan las pausas: ahí vale 0.53~\textmu s de tiempo de pared
-por mensaje, un 6\,\% de la tasa máxima.
-
-Las dos decisiones de diseño explican por qué es tan bajo, y las dos son
-anteriores a la medición: escribir fuera del mutex evita que una llamada al
-sistema lenta serialice el buffer, y un archivo por proceso evita contención
-entre ellos. El alcance del A/B queda declarado: con \code{/dev/null} el
-logger sigue formateando cada fila, así que aísla la escritura al archivo y
-no la instrumentación entera.
-
 \subsection{Mecanismo de espera: una condvar por causa}
 
-\textbf{Decisión.} Cuatro variables de condición ---\code{not\_full},
-\code{not\_empty}, \code{closing} y \code{all\_left}--- y la pausa simulada
-del productor implementada como espera con plazo sobre \code{closing}.
+\textbf{Decisión.} Una variable de condición por causa de espera, y la
+pausa simulada del productor implementada como espera con plazo sobre
+\code{closing}.
 
 \textbf{Alternativa descartada.} Dormir la pausa con \code{nanosleep}, que
 es lo obvio para «esperar \code{N} milisegundos»; y, una vez elegida la

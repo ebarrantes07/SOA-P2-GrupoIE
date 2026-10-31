@@ -21,15 +21,13 @@ ejecutable, \code{verify}, cruza los registros de todos los procesos y actúa
 como oráculo de corrección. La ejecución ocurre en una sola máquina
 GNU/Linux y no cubre la caída arbitraria de un proceso: las garantías se
 aplican a participantes que siguen el protocolo y a un cierre normal. Esa
-frontera no es una omisión cómoda, y la sección~\ref{sec:pruebas} documenta
-qué ocurre exactamente cuando se cruza.
+frontera no es una omisión cómoda, y la sección de pruebas documenta qué
+ocurre exactamente cuando se cruza.
 
-La sección~\ref{sec:arquitectura} describe el segmento compartido y qué dato
-es privado de cada proceso; la~\ref{sec:protocolo}, el pseudocódigo del
-registro, la inserción, la extracción y el cierre, con sus invariantes y sus
-puntos de efecto; la~\ref{sec:pruebas}, las pruebas mínimas y el oráculo;
-la~\ref{sec:resultados}, el experimento de 45 corridas;
-la~\ref{sec:lecturas}, la relación con Dijkstra y Birrell; y
-la~\ref{sec:decisiones}, cinco decisiones donde había una alternativa
-razonable que se descartó con evidencia. La sección~\ref{sec:gestion}
-documenta la trazabilidad del trabajo.
+El informe sigue el orden en que se construyó el sistema: primero el
+segmento compartido y qué dato es privado de cada proceso, después el
+protocolo de registro, inserción, extracción y cierre en pseudocódigo, con
+sus invariantes y sus puntos de efecto, y luego las pruebas y el oráculo que
+las respalda. Sobre esa base vienen el experimento, la relación con Dijkstra
+y Birrell, las cuatro decisiones de diseño donde había una alternativa
+razonable que se descartó con evidencia, y la trazabilidad del trabajo.
