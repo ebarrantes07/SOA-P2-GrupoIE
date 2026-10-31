@@ -1,0 +1,97 @@
+\documentclass[journal]{IEEEtran}
+
+% ===================
+% Paquetes
+% ===================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[spanish,es-noshorthands,es-tabla]{babel}
+\usepackage{amsmath, amsfonts, amssymb}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage[hyphens]{url}
+\usepackage{tikz}
+\usetikzlibrary{babel,arrows.meta,positioning,fit,calc}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{groupplots}
+\input{graficas/estilo}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage[breaklinks=true,hidelinks]{hyperref}
+
+% Bloque de "pendiente" bien visible en el PDF, para las secciones todavía
+% sin escribir. Se reemplaza por contenido real antes de la entrega: el PDF
+% entregado no debe contener ninguno (buscar "PENDIENTE" en main.log).
+\newcommand{\pendiente}[1]{%
+  \begin{quote}\small\color{black!60}%
+  \textbf{[PENDIENTE --- #1]}
+  \end{quote}%
+  \typeout{PENDIENTE: #1}%
+}
+
+% Nombres de código en el texto.
+\newcommand{\code}[1]{\texttt{#1}}
+
+% IEEEtran pone "Index Terms" en inglés.
+\renewcommand{\IEEEkeywordsname}{Palabras clave}
+
+% ===================
+% Título y autores
+% ===================
+% IEEEtran usa \Huge para el título; con este nombre largo ocupaba cuatro
+% líneas, así que va con \LARGE (con \huge, "POSIX:" quedaba sola).
+\title{\LARGE Buffer Acotado entre Procesos con Memoria Compartida POSIX:\\
+Sincronización, Cierre Ordenado y Evaluación Experimental}
+
+\author{
+    Isaac Francisco Moreno Fuentes,~\\
+    Emmanuel Barrantes Vargas\\
+    \thanks{Isaac Francisco Moreno Fuentes y Emmanuel Barrantes Vargas son estudiantes del curso MC 6004 Sistemas Operativos Avanzados, Tecnológico de Costa Rica, II semestre 2026.}
+}
+
+% ===================
+% Documento
+% ===================
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\pendiente{Resumen (ambos, al final): problema, protocolo con mutex y
+variables de condición compartidos entre procesos, cierre ordenado,
+verificación (205 pruebas, \code{verify}, sanitizers) y resultado central
+del experimento.}
+\end{abstract}
+
+\begin{IEEEkeywords}
+buffer acotado, productor-consumidor, memoria compartida POSIX,
+variables de condición, cierre ordenado
+\end{IEEEkeywords}
+
+% ===================
+% Secciones
+% ===================
+\input{introduccion}
+\input{arquitectura}
+\input{protocolo}
+\input{pruebas}
+\input{resultados}
+\input{lecturas}
+\input{decisiones}
+\input{gestion}
+\input{conclusiones}
+\input{declaracion_transparencia}
+\input{entrega}
+
+% ===================
+% Referencias
+% ===================
+\bibliographystyle{IEEEtran}
+\bibliography{referencias}
+
+\end{document}

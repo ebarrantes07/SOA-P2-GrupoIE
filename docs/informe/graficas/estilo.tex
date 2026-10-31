@@ -1,0 +1,24 @@
+% Estilo común de las figuras del experimento (pgfplots). Un color y un
+% marcador por escenario, así se distinguen también impresas en gris.
+% xmode=log va en cada eje y no aquí: pgfplots lo procesa antes de expandir
+% los estilos y dentro de uno da "I do not know the key /tikz/xmode".
+\definecolor{esc28}{RGB}{0,114,178}    % producción más rápida (2/8 ms)
+\definecolor{esc55}{RGB}{213,94,0}     % tasas equilibradas (5/5 ms)
+\definecolor{esc82}{RGB}{0,158,115}    % consumo más rápido (8/2 ms)
+\pgfplotsset{
+  experimento/.style={
+    width=\linewidth, height=4.6cm,
+    xtick={1,8,64}, xticklabels={1,8,64},
+    xmin=0.7, xmax=90,
+    xlabel={Capacidad del buffer (mensajes)},
+    tick label style={font=\footnotesize},
+    label style={font=\footnotesize},
+    legend style={font=\scriptsize, draw=none, fill=none},
+    grid=major, grid style={black!12},
+    error bars/y dir=both, error bars/y explicit,
+    error bars/error mark options={rotate=90, mark size=2pt},
+  },
+  e28/.style={color=esc28, mark=*, mark size=1.6pt, thick},
+  e55/.style={color=esc55, mark=square*, mark size=1.6pt, thick},
+  e82/.style={color=esc82, mark=triangle*, mark size=2pt, thick},
+}
