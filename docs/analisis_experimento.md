@@ -513,8 +513,8 @@ instrumentación, que no está en el alcance del proyecto.
   puntos de esos 75**. El modelo mide la ventana entre la última extracción y el
   retiro: 0.23 % de la vida del consumidor, porque `experimento.py` lanza el finisher
   en cuanto terminan los productores y la ventana es solo el `fork`/`exec` más el
-  `attach`. Haría falta que el corte llegara ~200 ms tarde para inflar 1 punto, y
-  ~1 s tarde para inflar 4. Así que ese 75 % es hambre genuina en más del 99 %, y la
+  `attach`. Medido contra retardos mayores: 50 ms tarde infla 0.7 puntos, 200 ms
+  infla 2.4 y 1 s infla 8.6. Así que ese 75 % es hambre genuina en más del 99 %, y la
   validez del dato depende de una propiedad del script, no de la suerte. La asimetría
   estructural que queda es que solo el consumidor puede esperar el corte, porque solo
   el productor tiene cuota con la cual retirarse por su cuenta.
