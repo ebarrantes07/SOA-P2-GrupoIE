@@ -33,7 +33,20 @@ PRESENT  := $(patsubst src/%.c,%,$(wildcard $(MAINS)))
 TEST_SRC := $(wildcard tests/test_*.c)
 TEST_BIN := $(patsubst tests/%.c,$(OBJDIR)/%,$(TEST_SRC))
 
-.PHONY: all test clean
+# ---- Sanitizers (#23) ---------------------------------------------------
+
+# ASan + UBSan sobre la suite completa.
+SANFLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
+
+# UBSan por defecto IMPRIME Y SIGUE, asi que una corrida con comportamiento
+# indefinido reportado terminaria en exito y el objetivo no serviria para el
+# criterio "cero errores reportados" del #23. halt_on_error lo vuelve fatal,
+# como ASan ya lo es. detect_leaks va explicito aunque sea el default en
+# Linux: el objetivo declara que tambien busca fugas.
+SANENV := ASAN_OPTIONS=detect_leaks=1 \
+          UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+
+.PHONY: all test test-san clean
 
 all: $(PRESENT)
 	@$(if $(PRESENT),true,echo "Aún no hay ejecutables en src/; nada que compilar.")
@@ -64,6 +77,19 @@ test: all $(TEST_BIN)
 		done; \
 		exit $$fail; \
 	fi
+
+# Limpia antes y despues a proposito, en vez de convivir con la compilacion
+# normal. Los objetos sanitizados comparten $(OBJDIR) y los ejecutables de
+# BINS viven en la raiz, asi que al quedar mas nuevos que los .o normales
+# make los daria por actualizados: un `make test` posterior seguiria
+# corriendo los binarios instrumentados sin avisar. El `clean` final deja el
+# arbol como estaba, y preserva el codigo de salida de la suite.
+test-san:
+	$(MAKE) clean
+	$(SANENV) $(MAKE) test \
+	    CFLAGS="$(CFLAGS) $(SANFLAGS)" \
+	    LDFLAGS="$(LDFLAGS) $(SANFLAGS)"; \
+	  rc=$$?; $(MAKE) clean; exit $$rc
 
 clean:
 	rm -rf $(OBJDIR) $(BINS)

@@ -3171,3 +3171,113 @@ participante tardío que llega en CLOSING igual es rechazado al registrarse
 `closing_release`, con las primitivas ya destruidas, y eso es lo que
 provocan los finisher perdedores de cada ronda.
 
+---
+
+## D35 — `make test-san`: la suite bajo ASan y UBSan
+
+- **Fecha:** 2026-10-30
+- **Issue:** [#23](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/23)
+- **Quién decide:** Emmanuel · **Revisa:** Isaac
+
+> **Numeración:** D33 es del #25 y D34 del #22, los dos en PR abiertos
+> cuando se escribió esta entrada; de ahí el salto a D35.
+
+### Contexto
+
+El #23 pide cuatro cosas: un objetivo de Makefile o un script que compile y
+corra la suite completa con ASan y UBSan, cero errores reportados o las
+limitaciones documentadas, una nota en el informe sobre lo que los
+sanitizers **no** demuestran, y registrar que `pthread_condattr_setclock`
+no existe en macOS.
+
+Hasta ahora las corridas con sanitizers se hacían pasando `CFLAGS` a mano,
+incluidas las que citan D29 y D32. Funciona, pero no es reproducible por un
+tercero sin leer la bitácora, y la línea exacta de banderas no estaba en
+ninguna parte del repositorio.
+
+### El objetivo limpia antes y después, en vez de convivir
+
+`test-san` hace `clean`, compila y corre la suite con las banderas, y vuelve
+a hacer `clean` preservando el código de salida.
+
+Convivir con la compilación normal sería más rápido pero está mal: los
+objetos sanitizados comparten `$(OBJDIR)` y los ejecutables de `BINS` viven
+en la raíz del repositorio. Al quedar más nuevos que los `.o` normales,
+`make` los daría por actualizados, y **un `make test` posterior seguiría
+corriendo los binarios instrumentados sin avisar**. Eso es peor que
+recompilar: daría una corrida "normal" que en realidad no lo es, con el
+costo y el comportamiento de ASan, y nadie lo notaría.
+
+Se descartó usar un `$(OBJDIR)` aparte porque no alcanza: los ejecutables
+seguirían compartiendo la ruta de la raíz, que es justamente la parte que
+engaña a `make`.
+
+### `UBSAN_OPTIONS=halt_on_error=1`, o el objetivo no sirve
+
+UBSan por defecto **imprime y sigue**. Sin esa opción, una corrida con
+comportamiento indefinido reportado termina con código 0, así que
+`make test-san` pasaría en verde con UB presente y el criterio "cero
+errores reportados" quedaría sin verificar.
+
+Comprobado con un programa de control de tres líneas (desborde de entero
+con signo):
+
+| Configuración | Código de salida |
+|---|---|
+| UBSan por defecto | **0** — reporta el UB y no falla |
+| `UBSAN_OPTIONS=halt_on_error=1` | **1** — el UB falla la corrida |
+
+ASan ya aborta por sí solo, así que no necesita equivalente.
+`detect_leaks=1` va explícito aunque sea el valor por omisión en Linux: el
+objetivo declara que también busca fugas, en vez de depender de un default.
+
+### Resultado
+
+Cero reportes de ASan, UBSan y LeakSanitizer, con la suite completa:
+
+- **198/198** sobre `main` (`make test-san`, esta rama).
+- **205/205** incluyendo `tests/test_closing.c` del #22, que estaba en un PR
+  abierto al escribir esto.
+
+Se verificó que el verde es real y no un montaje mal armado: 61 líneas de
+compilación y enlace con `-fsanitize=address,undefined`, `libasan` enlazada
+en los binarios de prueba, y un control positivo con desborde de heap y
+desborde de entero con signo que ASan y UBSan sí reportan.
+
+### Lo que los sanitizers no demuestran
+
+Importa decirlo porque es fácil leer "cero errores" como "no hay carreras":
+
+- **ASan no busca carreras de datos.** Detecta errores de memoria: accesos
+  fuera de rango, uso después de liberar, fugas. Una carrera que solo
+  produce un entrelazado incorrecto de valores válidos le pasa invisible.
+- **UBSan tampoco.** Detecta comportamiento indefinido del lenguaje
+  (desbordes con signo, desplazamientos inválidos, desalineamientos), no
+  concurrencia.
+- **ThreadSanitizer, que sí las busca, no sirve acá:** instrumenta hilos de
+  un mismo proceso y este sistema son nueve procesos separados sobre memoria
+  compartida. No hay herramienta equivalente para ese caso.
+
+Lo que argumenta la ausencia de carreras en este proyecto son los
+invariantes verificados y las pruebas de intercalados, no los sanitizers:
+`verify` cruzando los CSV de todos los procesos (D16), las cuatro corridas
+de conservación y escala (D30), las mutaciones del cierre que las pruebas
+detectan (D31), y las carreras de ciclo de vida con los ejecutables reales
+(D34). Los sanitizers son una red complementaria, no la que sostiene el
+argumento.
+
+### Limitaciones del entorno
+
+- **macOS.** `pthread_condattr_setclock` no existe ahí (D13), así que la
+  suite —con y sin sanitizers— se ejecuta en GNU/Linux, el entorno de
+  referencia declarado en el README. Además varias pruebas usan `/proc` y
+  `MAP_ANONYMOUS`.
+- **Costo.** `test-san` recompila desde cero dos veces (una para instrumentar
+  y el `clean` final), así que no reemplaza a `make test` en el ciclo de
+  desarrollo: es una verificación aparte.
+
+### Pendiente del #23
+
+El tercer criterio pide la nota en el **informe**, que todavía no existe
+(#26 y #27). El argumento técnico queda escrito arriba para que el informe
+lo cite en vez de rehacerlo; el criterio se marca cuando el informe esté.

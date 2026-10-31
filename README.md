@@ -26,7 +26,7 @@ experimental.
 | make | GNU Make 4.3 |
 | Biblioteca C | glibc 2.39 |
 
-`make test`, las corridas con ASan/UBSan y el experimento se validaron en ese entorno, compilando
+`make test`, `make test-san` (ASan/UBSan) y el experimento se validaron en ese entorno, compilando
 desde una copia limpia del repositorio. El desarrollo se hizo además en macOS (Apple clang), donde
 el código compila, pero la suite completa necesita Linux: algunas pruebas usan `/proc` y
 `MAP_ANONYMOUS`, y macOS no implementa `pthread_condattr_setclock` (ver D13 y D20).
@@ -36,6 +36,7 @@ el código compila, pero la suite completa necesita Linux: algunas pruebas usan 
 ```bash
 make          # compila los ejecutables: creator, producer, consumer, finisher y verify
 make test     # ejecuta las pruebas automatizadas (código ≠ 0 ante un incumplimiento)
+make test-san # la misma suite bajo AddressSanitizer y UndefinedBehaviorSanitizer
 make clean    # elimina objetos y ejecutables
 ```
 
