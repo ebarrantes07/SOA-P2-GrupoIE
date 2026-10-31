@@ -248,6 +248,57 @@ resultado del verificador. Termina con código 0 solo si las 45 corridas quedaro
 Las semillas se derivan de `--base-seed`, así que repetir el experimento con la misma base
 reproduce las mismas secuencias de pausas. Detalles en `docs/decisiones_diseno.md` (D27).
 
+## Gestión y trazabilidad
+
+El trabajo se organizó en 32 Issues con criterios de aceptación explícitos, 29 de ellos
+cerrados, y 31 Pull Requests integrados —todos con al menos una revisión del otro integrante y
+11 con dos— sobre 149 commits. Dos Issues de diseño precedieron a la implementación: uno fijó
+el formato del segmento y el protocolo de inserción y extracción, y el otro el registro de
+participantes, el protocolo de cierre y el formato de los registros. Ninguno de los dos se
+implementó antes de estar revisado. Las decisiones se anotaron en `docs/decisiones_diseno.md` a
+medida que se tomaban, cada entrada en el Pull Request que la implementó, no al final.
+
+### Responsabilidades
+
+El reparto siguió los módulos, no las líneas.
+
+**Emmanuel Barrantes** trabajó el formato del segmento y el protocolo de inserción y
+extracción, el buffer circular, la capa de sincronización, el reloj monotónico con el generador
+pseudoaleatorio y la pausa exponencial, las métricas con el histograma de latencia, el payload
+verificable, el verificador `verify`, el ejecutable `producer` y la primera mitad del
+`finisher`, el resumen final, el script del experimento y su análisis, las pruebas de
+conservación, escala, espera bloqueante y cierre, y el objetivo de los sanitizers.
+
+**Isaac Moreno** trabajó el repositorio con su Makefile y su README, el registro de
+participantes junto con el protocolo de cierre y el formato de los registros, el módulo de
+memoria compartida con el `creator`, el análisis y validación de argumentos, el registrador
+CSV, el ejecutable `consumer`, la segunda mitad del `finisher` con la espera de retiradas y la
+liberación, las pruebas de validación, aislamiento y carreras de ciclo de vida, y la
+verificación final del código contra el enunciado.
+
+En el informe, las secciones de arquitectura, protocolo y pruebas son de Isaac, y las de
+resultados, lecturas y decisiones de Emmanuel; el resto es conjunto.
+
+### Issues, ramas y revisiones
+
+Cada cambio entró por una rama con nombre derivado de su Issue y un Pull Request que declara la
+validación ejecutada y queda a revisión del otro integrante. Los commits pertenecen a quien
+hizo el trabajo; no se reescribió historia compartida, no se sustituyó el repositorio al final
+y ningún cambio entró como un único commit.
+
+Las revisiones no fueron de forma. Una encontró que la fila `lock_acquire` del resumen
+declaraba incluir la readquisición del mutex al despertar de la espera, cuando el tiempo de
+bloqueo se mide una sola vez alrededor de la toma inicial y esa readquisición queda
+contabilizada en el tiempo de espera. Los datos lo confirmaron —la nota implicaba unos 60 µs y
+lo medido son 0.89 a 1.74 µs— y se corrigió la nota junto con la prueba que la aseveraba
+(#61). Lo detectó el cruce de la documentación con el código, no una prueba, que habría pasado
+igual.
+
+Dos incidentes del flujo quedaron en el historial en vez de borrarse: un Pull Request integrado
+contra la rama equivocada, que dejó su trabajo fuera de `main` y hubo que rehacerlo contra
+ella, y una colisión de numeración en la bitácora cuando dos ramas reclamaron la misma entrada
+a la vez.
+
 ## Versión entregada
 
 _Pendiente: URL, etiqueta `p2-entrega` y hash completo del commit._

@@ -13,9 +13,12 @@ sección por archivo `.tex`, referencias en `referencias.bib`.
 | `resultados.tex` | Resultados del experimento | Emmanuel (#25) |
 | `lecturas.tex` | Relación con Dijkstra y Birrell | Emmanuel (#27) |
 | `decisiones.tex` | Discusión de decisiones de diseño | Emmanuel (#27) |
-| `gestion.tex` | Gestión del proyecto y trazabilidad | ambos |
 | `conclusiones.tex` | Conclusiones | ambos |
 | `declaracion_transparencia.tex`, `entrega.tex` | Uso de IA, material reutilizado, URL/etiqueta/hash | ambos |
+
+La gestión del proyecto y la trazabilidad (responsabilidades, Issues, Pull
+Requests y revisiones) no van en el informe: están en la sección «Gestión y
+trazabilidad» del README del repositorio.
 
 Lo que falta escribir aparece en el PDF como **[PENDIENTE — …]** y en el log
 de compilación como `PENDIENTE:`. El PDF entregado no debe tener ninguno.

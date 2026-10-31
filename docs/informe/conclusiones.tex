@@ -1,26 +1,26 @@
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-El protocolo cumple las garantías que el enunciado pide, y lo sostienen dos
-clases independientes de evidencia: un verificador externo a la
-implementación, que no halló violaciones de conservación, unicidad,
-integridad ni FIFO en ninguna corrida, y una suite con intercalados
-difíciles de provocar a mano ---cierre en plena actividad, incorporaciones
-durante el cierre, cuatro finalizadores compitiendo--- bajo sanitizers sin
-reportes. Las dos son necesarias: los sanitizers no buscan carreras y el
-verificador no detecta errores de memoria.
+\begin{itemize}
+\item \textbf{El protocolo cumple las garantías del enunciado,} sostenido
+      por dos clases de evidencia que no se sustituyen: un verificador
+      externo a la implementación, sin violaciones de conservación,
+      unicidad, integridad ni FIFO en ninguna corrida, y una suite de
+      intercalados bajo sanitizers sin reportes. Los sanitizers no buscan
+      carreras; el verificador no detecta errores de memoria.
 
-Del experimento, el resultado central es que subir la capacidad del buffer
-no es una mejora sino un intercambio: aumenta el caudal solo cuando ninguno
-de los dos lados es el cuello de botella, mientras la latencia sube siempre
-y, en régimen saturado, deja de medir el protocolo para volverse la
-capacidad dividida por la tasa de drenaje.
+\item \textbf{Subir la capacidad del buffer es un intercambio, no una
+      mejora.} Aumenta el caudal solo cuando ninguno de los dos lados es el
+      cuello de botella, y la latencia sube siempre. En régimen saturado
+      deja de medir el protocolo: es la capacidad entre la tasa de drenaje.
 
-Y queda nítida la frontera entre lo que garantiza el algoritmo ---exclusión,
-conservación, orden y terminación--- y lo que concede el sistema operativo,
-que decide quién de los que esperan avanza y cuándo. Ninguna propiedad de
-corrección depende de esa frontera, pero varios números sí. El alcance
-tampoco se amplía al final: no hay recuperación ante la caída arbitraria de
-un proceso, no existe herramienta que busque carreras entre procesos
-separados sobre memoria compartida, y las mediciones vienen de un binario
-sin optimizar sobre un hipervisor.
+\item \textbf{La frontera entre el algoritmo y el sistema es nítida.} El
+      algoritmo garantiza exclusión, conservación, orden y terminación; el
+      sistema decide quién de los que esperan avanza y cuándo. Ninguna
+      propiedad de corrección depende de esa frontera; varios números sí.
+
+\item \textbf{Los límites están declarados, no descubiertos al final:} sin
+      recuperación ante la caída arbitraria de un proceso, sin herramienta
+      que busque carreras entre procesos separados, y con mediciones de un
+      binario sin optimizar sobre un hipervisor.
+\end{itemize}
