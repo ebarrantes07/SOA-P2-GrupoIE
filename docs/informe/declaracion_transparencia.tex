@@ -1,32 +1,24 @@
 \section*{Declaración de Transparencia, Uso de IA y Material Reutilizado}
 
-\textbf{Uso de inteligencia artificial.} Se usó Claude Code (Anthropic) como
-herramienta auxiliar en tres tareas: redactar en español a partir de las
-decisiones y los hallazgos que el equipo ya había registrado en la bitácora
-y en los \emph{Issues}; construir el pseudocódigo, las figuras y las tablas
-a partir del código fuente y de los datos del experimento; y revisar
-formato y ortografía. No se usó para decidir el diseño ni para producir
-afirmaciones técnicas sin comprobar.
+Para la redacción de este informe se utilizó Claude Code (Anthropic) como
+herramienta auxiliar de apoyo: síntesis de las decisiones de diseño y
+hallazgos técnicos ya documentados por el equipo a lo largo del proyecto,
+redacción del texto en español, generación del pseudocódigo y las figuras a
+partir del código fuente real y de los datos experimentales reproducidos
+para este documento, y revisión ortográfica y de formato. Todo el contenido
+técnico (arquitectura, algoritmos, resultados de pruebas y experimentos) se
+verificó contra el código fuente y las corridas reales del programa antes
+de incluirse.
 
-\textbf{Todo el contenido técnico se verificó contra el código y contra
-corridas reales antes de incluirse.} Los valores de las tablas del
-experimento salen de los resúmenes versionados en el repositorio; los
-predicados de espera, los puntos de efecto y los tamaños del segmento se
-cotejaron con los archivos fuente; y las cifras de las pruebas provienen de
-ejecuciones de la suite. Ese cotejo encontró errores en borradores de este
-mismo informe ---entre ellos una afirmación sobre el cierre ante caídas que
-el código contradecía--- y se corrigieron antes de la entrega.
-
-\textbf{Material reutilizado.} El generador pseudoaleatorio
-\code{xorshift32} de \code{src/rng.c} se reutiliza del Proyecto~1 del mismo
-grupo, trabajo propio de los dos integrantes y por lo tanto sin
-restricciones de terceros; la secuencia es la publicada por
-Marsaglia~\cite{Marsaglia2003}. Lo nuevo acá es el muestreo exponencial por
-transformada inversa. El checksum del payload implementa FNV-1a desde su
-especificación~\cite{FNV}, cuyos autores la publicaron en el dominio
-público, sin copiar código de terceros. El informe usa la plantilla
-\code{IEEEtran}, bajo su propia licencia de uso académico. Los scripts de
-análisis usan solo la biblioteca estándar de Python.
-
-El resto del código, el pseudocódigo, las figuras y los datos
-experimentales son originales de este proyecto.
+Fuera de la plantilla LaTeX \code{IEEEtran} (uso académico estándar, bajo su
+propia licencia), el material reutilizado es de dos clases y ninguna
+proviene de terceros. El generador pseudoaleatorio \code{xorshift32} de
+\code{src/rng.c} se reutiliza tal cual del Proyecto~1 de los mismos
+integrantes ---trabajo propio, sin restricciones externas---; la secuencia es
+la publicada por Marsaglia~\cite{Marsaglia2003} y lo nuevo acá es el
+muestreo exponencial por transformada inversa. El checksum de la carga útil
+implementa FNV-1a desde su especificación~\cite{FNV}, que sus autores
+publicaron en el dominio público, sin copiar código. Los scripts de análisis
+usan solo la biblioteca estándar de Python. Todo lo demás ---código fuente,
+pseudocódigo, figuras y datos experimentales--- fue producido por el equipo
+específicamente para este proyecto.
