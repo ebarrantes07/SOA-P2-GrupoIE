@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="420" viewBox="0 0 860 420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+  <rect width="860" height="420" fill="#fcfcfb"/>
+  <text x="70.0" y="28.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Donde se espera: productor y consumidor</text>
+  <text x="70.0" y="46.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">espera acumulada del rol como porcentaje de su tiempo de vida; misma escala en los dos paneles</text>
+  <text x="72.0" y="60.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="600">Productor, esperando espacio (not_full)</text>
+  <line x1="72.0" y1="328.0" x2="426.0" y2="328.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="331.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">0%</text>
+  <line x1="72.0" y1="277.6" x2="426.0" y2="277.6" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="281.1" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">20%</text>
+  <line x1="72.0" y1="227.2" x2="426.0" y2="227.2" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="230.7" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">40%</text>
+  <line x1="72.0" y1="176.8" x2="426.0" y2="176.8" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="180.3" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">60%</text>
+  <line x1="72.0" y1="126.4" x2="426.0" y2="126.4" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="129.9" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">80%</text>
+  <line x1="72.0" y1="76.0" x2="426.0" y2="76.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="79.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">100%</text>
+  <line x1="72.0" y1="328.0" x2="426.0" y2="328.0" stroke="#b9b8b2" stroke-width="1"/>
+  <path d="M85.0,328.0 L85.0,147.3 Q85.0,143.3 89.0,143.3 L110.3,143.3 Q114.3,143.3 114.3,147.3 L114.3,328.0 Z" fill="#2a78d6"/>
+  <text x="99.7" y="137.3" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">73</text>
+  <path d="M116.3,328.0 L116.3,292.3 Q116.3,288.3 120.3,288.3 L141.7,288.3 Q145.7,288.3 145.7,292.3 L145.7,328.0 Z" fill="#eb6834"/>
+  <text x="131.0" y="282.3" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">16</text>
+  <path d="M147.7,328.0 L147.7,328.0 Q147.7,327.9 147.8,327.9 L176.9,327.9 Q177.0,327.9 177.0,328.0 L177.0,328.0 Z" fill="#1baf7a"/>
+  <text x="162.3" y="321.9" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0</text>
+  <text x="131.0" y="348.0" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">cap 1</text>
+  <path d="M203.0,328.0 L203.0,147.1 Q203.0,143.1 207.0,143.1 L228.3,143.1 Q232.3,143.1 232.3,147.1 L232.3,328.0 Z" fill="#2a78d6"/>
+  <text x="217.7" y="137.1" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">73</text>
+  <path d="M234.3,328.0 L234.3,316.7 Q234.3,312.7 238.3,312.7 L259.7,312.7 Q263.7,312.7 263.7,316.7 L263.7,328.0 Z" fill="#eb6834"/>
+  <text x="249.0" y="306.7" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">6</text>
+  <path d="M265.7,328.0 L265.7,328.0 Q265.7,328.0 265.7,328.0 L295.0,328.0 Q295.0,328.0 295.0,328.0 L295.0,328.0 Z" fill="#1baf7a"/>
+  <text x="280.3" y="322.0" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0</text>
+  <text x="249.0" y="348.0" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">cap 8</text>
+  <path d="M321.0,328.0 L321.0,152.5 Q321.0,148.5 325.0,148.5 L346.3,148.5 Q350.3,148.5 350.3,152.5 L350.3,328.0 Z" fill="#2a78d6"/>
+  <text x="335.7" y="142.5" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">71</text>
+  <path d="M352.3,328.0 L352.3,328.0 Q352.3,326.4 353.9,326.4 L380.1,326.4 Q381.7,326.4 381.7,328.0 L381.7,328.0 Z" fill="#eb6834"/>
+  <text x="367.0" y="320.4" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">1</text>
+  <path d="M383.7,328.0 L383.7,328.0 Q383.7,328.0 383.7,328.0 L413.0,328.0 Q413.0,328.0 413.0,328.0 L413.0,328.0 Z" fill="#1baf7a"/>
+  <text x="398.3" y="322.0" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0</text>
+  <text x="367.0" y="348.0" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">cap 64</text>
+  <text x="482.0" y="60.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="600">Consumidor, esperando datos (not_empty)</text>
+  <line x1="482.0" y1="328.0" x2="836.0" y2="328.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="474.0" y="331.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">0%</text>
+  <line x1="482.0" y1="277.6" x2="836.0" y2="277.6" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="474.0" y="281.1" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">20%</text>
+  <line x1="482.0" y1="227.2" x2="836.0" y2="227.2" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="474.0" y="230.7" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">40%</text>
+  <line x1="482.0" y1="176.8" x2="836.0" y2="176.8" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="474.0" y="180.3" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">60%</text>
+  <line x1="482.0" y1="126.4" x2="836.0" y2="126.4" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="474.0" y="129.9" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">80%</text>
+  <line x1="482.0" y1="76.0" x2="836.0" y2="76.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="474.0" y="79.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">100%</text>
+  <line x1="482.0" y1="328.0" x2="836.0" y2="328.0" stroke="#b9b8b2" stroke-width="1"/>
+  <path d="M495.0,328.0 L495.0,327.8 Q495.0,323.8 499.0,323.8 L520.3,323.8 Q524.3,323.8 524.3,327.8 L524.3,328.0 Z" fill="#2a78d6"/>
+  <text x="509.7" y="317.8" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">2</text>
+  <path d="M526.3,328.0 L526.3,279.3 Q526.3,275.3 530.3,275.3 L551.7,275.3 Q555.7,275.3 555.7,279.3 L555.7,328.0 Z" fill="#eb6834"/>
+  <text x="541.0" y="269.3" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">21</text>
+  <path d="M557.7,328.0 L557.7,142.2 Q557.7,138.2 561.7,138.2 L583.0,138.2 Q587.0,138.2 587.0,142.2 L587.0,328.0 Z" fill="#1baf7a"/>
+  <text x="572.3" y="132.2" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">75</text>
+  <text x="541.0" y="348.0" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">cap 1</text>
+  <path d="M613.0,328.0 L613.0,328.0 Q613.0,326.8 614.2,326.8 L641.2,326.8 Q642.3,326.8 642.3,328.0 L642.3,328.0 Z" fill="#2a78d6"/>
+  <text x="627.7" y="320.8" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0</text>
+  <path d="M644.3,328.0 L644.3,298.4 Q644.3,294.4 648.3,294.4 L669.7,294.4 Q673.7,294.4 673.7,298.4 L673.7,328.0 Z" fill="#eb6834"/>
+  <text x="659.0" y="288.4" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">13</text>
+  <path d="M675.7,328.0 L675.7,143.6 Q675.7,139.6 679.7,139.6 L701.0,139.6 Q705.0,139.6 705.0,143.6 L705.0,328.0 Z" fill="#1baf7a"/>
+  <text x="690.3" y="133.6" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">75</text>
+  <text x="659.0" y="348.0" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">cap 8</text>
+  <path d="M731.0,328.0 L731.0,328.0 Q731.0,327.2 731.8,327.2 L759.5,327.2 Q760.3,327.2 760.3,328.0 L760.3,328.0 Z" fill="#2a78d6"/>
+  <text x="745.7" y="321.2" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">0</text>
+  <path d="M762.3,328.0 L762.3,309.3 Q762.3,305.3 766.3,305.3 L787.7,305.3 Q791.7,305.3 791.7,309.3 L791.7,328.0 Z" fill="#eb6834"/>
+  <text x="777.0" y="299.3" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">9</text>
+  <path d="M793.7,328.0 L793.7,137.8 Q793.7,133.8 797.7,133.8 L819.0,133.8 Q823.0,133.8 823.0,137.8 L823.0,328.0 Z" fill="#1baf7a"/>
+  <text x="808.3" y="127.8" font-size="10" fill="#0b0b0b" text-anchor="middle" font-weight="600">77</text>
+  <text x="777.0" y="348.0" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="normal">cap 64</text>
+  <rect x="72.0" y="378.0" width="10" height="10" rx="2" fill="#2a78d6"/>
+  <text x="87.0" y="386.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 2 ms / consumidor 8 ms</text>
+  <rect x="289.6" y="378.0" width="10" height="10" rx="2" fill="#eb6834"/>
+  <text x="304.6" y="386.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 5 ms / consumidor 5 ms</text>
+  <rect x="507.2" y="378.0" width="10" height="10" rx="2" fill="#1baf7a"/>
+  <text x="522.2" y="386.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 8 ms / consumidor 2 ms</text>
+</svg>

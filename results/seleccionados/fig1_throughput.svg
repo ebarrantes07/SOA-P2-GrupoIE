@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="418" viewBox="0 0 820 418" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+  <rect width="820" height="418" fill="#fcfcfb"/>
+  <text x="70.0" y="28.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Throughput por capacidad y escenario</text>
+  <text x="70.0" y="46.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">media de 5 repeticiones; la barra de error es la desviacion estandar entre repeticiones</text>
+  <line x1="72.0" y1="326.0" x2="796.0" y2="326.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="329.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">0</text>
+  <line x1="72.0" y1="277.6" x2="796.0" y2="277.6" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="281.1" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">200</text>
+  <line x1="72.0" y1="229.2" x2="796.0" y2="229.2" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="232.7" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">400</text>
+  <line x1="72.0" y1="180.8" x2="796.0" y2="180.8" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="184.3" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">600</text>
+  <line x1="72.0" y1="132.4" x2="796.0" y2="132.4" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="135.9" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">800</text>
+  <line x1="72.0" y1="84.0" x2="796.0" y2="84.0" stroke="#e5e4e0" stroke-width="1"/>
+  <text x="64.0" y="87.5" font-size="11" fill="#52514e" text-anchor="end" font-weight="normal">1000</text>
+  <text x="70.0" y="72.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">mensajes por segundo</text>
+  <line x1="72.0" y1="326.0" x2="796.0" y2="326.0" stroke="#b9b8b2" stroke-width="1"/>
+  <path d="M95.0,326.0 L95.0,211.9 Q95.0,207.9 99.0,207.9 L154.8,207.9 Q158.8,207.9 158.8,211.9 L158.8,326.0 Z" fill="#2a78d6"/>
+  <text x="126.9" y="193.9" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">488</text>
+  <line x1="126.9" y1="204.3" x2="126.9" y2="211.4" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="122.9" y1="204.3" x2="130.9" y2="204.3" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="122.9" y1="211.4" x2="130.9" y2="211.4" stroke="#0b0b0b" stroke-width="1.2"/>
+  <path d="M160.8,326.0 L160.8,182.0 Q160.8,178.0 164.8,178.0 L220.6,178.0 Q224.6,178.0 224.6,182.0 L224.6,326.0 Z" fill="#eb6834"/>
+  <text x="192.7" y="164.0" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">611</text>
+  <line x1="192.7" y1="176.3" x2="192.7" y2="179.8" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="188.7" y1="176.3" x2="196.7" y2="176.3" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="188.7" y1="179.8" x2="196.7" y2="179.8" stroke="#0b0b0b" stroke-width="1.2"/>
+  <path d="M226.6,326.0 L226.6,218.8 Q226.6,214.8 230.6,214.8 L286.3,214.8 Q290.3,214.8 290.3,218.8 L290.3,326.0 Z" fill="#1baf7a"/>
+  <text x="258.4" y="200.8" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">459</text>
+  <line x1="258.4" y1="207.0" x2="258.4" y2="222.6" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="254.4" y1="207.0" x2="262.4" y2="207.0" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="254.4" y1="222.6" x2="262.4" y2="222.6" stroke="#0b0b0b" stroke-width="1.2"/>
+  <text x="192.7" y="346.0" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="normal">capacidad 1</text>
+  <path d="M336.3,326.0 L336.3,210.8 Q336.3,206.8 340.3,206.8 L396.1,206.8 Q400.1,206.8 400.1,210.8 L400.1,326.0 Z" fill="#2a78d6"/>
+  <text x="368.2" y="192.8" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">492</text>
+  <line x1="368.2" y1="202.7" x2="368.2" y2="211.0" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="364.2" y1="202.7" x2="372.2" y2="202.7" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="364.2" y1="211.0" x2="372.2" y2="211.0" stroke="#0b0b0b" stroke-width="1.2"/>
+  <path d="M402.1,326.0 L402.1,161.7 Q402.1,157.7 406.1,157.7 L461.9,157.7 Q465.9,157.7 465.9,161.7 L465.9,326.0 Z" fill="#eb6834"/>
+  <text x="434.0" y="143.7" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">695</text>
+  <line x1="434.0" y1="150.6" x2="434.0" y2="164.8" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="430.0" y1="150.6" x2="438.0" y2="150.6" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="430.0" y1="164.8" x2="438.0" y2="164.8" stroke="#0b0b0b" stroke-width="1.2"/>
+  <path d="M467.9,326.0 L467.9,214.6 Q467.9,210.6 471.9,210.6 L527.7,210.6 Q531.7,210.6 531.7,214.6 L531.7,326.0 Z" fill="#1baf7a"/>
+  <text x="499.8" y="196.6" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">477</text>
+  <line x1="499.8" y1="204.2" x2="499.8" y2="216.9" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="495.8" y1="204.2" x2="503.8" y2="204.2" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="495.8" y1="216.9" x2="503.8" y2="216.9" stroke="#0b0b0b" stroke-width="1.2"/>
+  <text x="434.0" y="346.0" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="normal">capacidad 8</text>
+  <path d="M577.7,326.0 L577.7,215.5 Q577.7,211.5 581.7,211.5 L637.4,211.5 Q641.4,211.5 641.4,215.5 L641.4,326.0 Z" fill="#2a78d6"/>
+  <text x="609.6" y="197.5" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">473</text>
+  <line x1="609.6" y1="207.7" x2="609.6" y2="215.3" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="605.6" y1="207.7" x2="613.6" y2="207.7" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="605.6" y1="215.3" x2="613.6" y2="215.3" stroke="#0b0b0b" stroke-width="1.2"/>
+  <path d="M643.4,326.0 L643.4,155.4 Q643.4,151.4 647.4,151.4 L703.2,151.4 Q707.2,151.4 707.2,155.4 L707.2,326.0 Z" fill="#eb6834"/>
+  <text x="675.3" y="137.4" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">722</text>
+  <line x1="675.3" y1="148.1" x2="675.3" y2="154.7" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="671.3" y1="148.1" x2="679.3" y2="148.1" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="671.3" y1="154.7" x2="679.3" y2="154.7" stroke="#0b0b0b" stroke-width="1.2"/>
+  <path d="M709.2,326.0 L709.2,222.2 Q709.2,218.2 713.2,218.2 L769.0,218.2 Q773.0,218.2 773.0,222.2 L773.0,326.0 Z" fill="#1baf7a"/>
+  <text x="741.1" y="204.2" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">445</text>
+  <line x1="741.1" y1="215.2" x2="741.1" y2="221.2" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="737.1" y1="215.2" x2="745.1" y2="215.2" stroke="#0b0b0b" stroke-width="1.2"/>
+  <line x1="737.1" y1="221.2" x2="745.1" y2="221.2" stroke="#0b0b0b" stroke-width="1.2"/>
+  <text x="675.3" y="346.0" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="normal">capacidad 64</text>
+  <rect x="72.0" y="376.0" width="10" height="10" rx="2" fill="#2a78d6"/>
+  <text x="87.0" y="384.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 2 ms / consumidor 8 ms</text>
+  <rect x="289.6" y="376.0" width="10" height="10" rx="2" fill="#eb6834"/>
+  <text x="304.6" y="384.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 5 ms / consumidor 5 ms</text>
+  <rect x="507.2" y="376.0" width="10" height="10" rx="2" fill="#1baf7a"/>
+  <text x="522.2" y="384.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">productor 8 ms / consumidor 2 ms</text>
+</svg>

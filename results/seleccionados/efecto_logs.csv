@@ -1,0 +1,5 @@
+regimen,destino,n,mensajes,throughput_mean,throughput_sd,latency_mean_ms,bytes_csv
+pausas 5/5,archivo,7,800,679.493,47.062,4.9224,158858
+pausas 5/5,/dev/null,7,800,671.699,25.259,5.5494,0
+sin pausas,archivo,7,20000,106212.598,5078.632,0.0425,4124482
+sin pausas,/dev/null,7,20000,112595.405,3798.265,0.0397,0
