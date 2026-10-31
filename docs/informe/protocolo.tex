@@ -1,4 +1,368 @@
 \section{Protocolo de sincronización y cierre}
 \label{sec:protocolo}
 
-\pendiente{Isaac, \#26: Pseudocódigo de registro (puerta \code{refs} con CAS y registro), inserción (\code{sync\_put}), extracción (\code{sync\_get}) y cierre (\code{closing\_begin}, espera en \code{all\_left}, \code{closing\_release}). Tabla de predicados de espera por condvar y quién los hace verdaderos. Invariantes y puntos donde cada operación toma efecto. Ausencia de deadlock. Respuestas a las preguntas orientadoras del enunciado. Fuentes: D3, D9, D10, D18, D21, D26.}
+\subsection{Primitivas y separación de responsabilidades}
+
+Se eligieron un mutex y variables de condición POSIX en lugar de semáforos:
+el cierre necesita despertar a \emph{todos} los bloqueados de una vez, algo
+que una variable de condición hace con \code{broadcast} y un semáforo solo
+logra fabricando permisos ficticios. Las cinco primitivas viven en el
+segmento, inicializadas con \code{PTHREAD\_PROCESS\_SHARED}, y cada una
+tiene un papel distinto:
+
+\begin{itemize}
+  \item \code{mutex}: \textbf{exclusión} sobre todo el estado mutable
+  (buffer, secuencias, estado, registro y métricas).
+  \item \code{not\_empty}: \textbf{disponibilidad de mensajes}; en ella
+  solo duermen consumidores.
+  \item \code{not\_full}: \textbf{disponibilidad de espacio}; en ella solo
+  duermen productores.
+  \item \code{closing}: la \textbf{pausa simulada} del productor, para que
+  el cierre la interrumpa sin robar señales de \code{not\_full}.
+  \item \code{all\_left}: la espera del finalizador por las
+  \textbf{retiradas}.
+\end{itemize}
+
+Un proceso que no puede avanzar duerme en una de las cuatro variables de
+condición y, al despertar, vuelve a evaluar su predicado en un ciclo
+\code{while} con el mutex tomado. La Tabla~\ref{tab:predicados} resume,
+para cada variable, el predicado de espera y qué operación lo cambia:
+qué condición permite avanzar a cada participante y quién puede hacerla
+verdadera. En la tabla y en el resto del informe, \emph{corte} es la
+transición de OPEN a CLOSING con la que el finalizador inicia el cierre.
+
+\begin{table}[H]
+\centering
+\caption{Predicados de espera y quién los vuelve falsos}
+\label{tab:predicados}
+\footnotesize
+\begin{tabular}{@{}p{1.45cm}p{3.05cm}p{3.2cm}@{}}
+\toprule
+Condvar & Duerme mientras & Lo despierta \\
+\midrule
+\code{not\_full} & $\mathit{count}=\mathit{cap} \land \mathit{state}=\mathrm{OPEN}$ &
+  \code{get} (\code{signal}); corte (\code{broadcast}) \\
+\code{not\_empty} & $\mathit{count}=0 \land \mathit{state}=\mathrm{OPEN}$ &
+  \code{put} (\code{signal}); corte (\code{broadcast}) \\
+\code{closing} & $\mathit{state}=\mathrm{OPEN} \land$ plazo sin vencer &
+  corte (\code{broadcast}); vencimiento de \code{timedwait} \\
+\code{all\_left} & $(\mathit{refs} \mathbin{\&} \mathrm{MASK}) > 1$ &
+  \code{instance\_detach} (\code{signal}) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La columna \emph{Duerme mientras} es lo contrario de la condición para
+avanzar: el proceso sigue dormido mientras la expresión sea verdadera. La
+columna \emph{Lo despierta} indica qué operación la vuelve falsa y con qué
+aviso. En la primera fila, por ejemplo, un productor duerme mientras el
+buffer esté lleno y la instancia siga abierta; lo despierta un \code{get},
+que libera una casilla, o el corte, que cambia el estado. En la última,
+$\mathit{refs} \mathbin{\&} \mathrm{MASK}$ es la cantidad de procesos
+conectados: el finalizador duerme mientras quede alguien además de él.
+Todo cambio que vuelve falso un predicado ocurre bajo el mismo mutex y va
+seguido de su aviso, así que ningún despertar se pierde.
+
+En operación normal basta \code{signal}: un \code{put} produce exactamente
+un mensaje y despierta a un consumidor; un \code{get} libera una casilla y
+despierta a un productor. Esto es correcto solo porque las condiciones
+están separadas por rol: en una condvar compartida, \code{signal} podría
+despertar a un proceso del rol equivocado y perder el aviso. El corte, en
+cambio, vuelve falso el predicado de \emph{todos} los que esperan, por eso
+\code{closing\_begin} hace \code{broadcast} sobre las cuatro condiciones.
+
+No se usan permisos adicionales para despertar. Quien despierta por el
+corte lo distingue de un evento real porque, al reevaluar bajo el mutex,
+encuentra $\mathit{state}\neq\mathrm{OPEN}$.
+
+\subsection{Registro, inserción y extracción}
+
+Los Algoritmos~\ref{alg:registro} a~\ref{alg:get} presentan estas tres
+operaciones en pseudocódigo. Todo lo que está entre
+\code{lock} y \code{unlock} ocurre con el mutex tomado; la marca
+\textbf{efecto} señala la línea donde la operación pasa a ser visible para
+los demás procesos.
+
+El Algoritmo~\ref{alg:registro} usa \emph{CAS} (\emph{compare-and-swap}),
+una operación atómica del procesador que compara una variable con el valor
+que se leyó antes y, solo si siguen siendo iguales, la reemplaza por uno
+nuevo, todo en un único paso indivisible. Así,
+$\mathrm{CAS}(\mathit{refs}, v, v+1)$ significa: ``si
+$\mathit{refs}$ todavía vale $v$, que es lo que se leyó, cámbialo a $v+1$;
+si otro proceso lo modificó entretanto, no escribas nada e informa el
+fallo''. Ante un fallo, el proceso vuelve a leer y reintenta.
+De este modo dos procesos pueden incrementar \code{refs} a la vez sin
+perder ninguna cuenta, y ninguno lo incrementa si la puerta se cerró
+entre la lectura y la escritura.
+
+El registro de un participante ocurre en dos
+pasos, conexión y registro, que muestra el Algoritmo~\ref{alg:registro}.
+
+\begin{algorithm}[H]
+\caption{Conexión y registro}
+\label{alg:registro}
+\footnotesize
+\begin{algorithmic}[1]
+\STATE mapear el segmento; validar \code{magic} (\emph{acquire}), versión y tamaño
+\REPEAT
+  \STATE $v \gets \mathit{refs}$
+  \IF{$v \mathbin{\&} \mathrm{GATE\_CLOSED}$}
+    \STATE \code{munmap}; \textbf{return} \code{ATTACH\_CLOSING} \COMMENT{sin tocar primitivas}
+  \ENDIF
+\UNTIL{$\mathrm{CAS}(\mathit{refs}, v, v+1)$} \COMMENT{\textbf{efecto}}
+\STATE \code{lock}(\code{mutex})
+\IF{$\mathit{state}\neq\mathrm{OPEN}$ o \code{id} ya usado en el rol o tabla llena}
+  \STATE $r \gets$ rechazo \COMMENT{no modifica nada}
+\ELSE
+  \STATE ocupar una casilla nueva con \code{id}; $\mathit{active}_{\mathit{rol}}{+}{+}$ \COMMENT{\textbf{efecto}}
+\ENDIF
+\STATE \code{unlock}(\code{mutex}); si hubo rechazo, \code{instance\_detach}
+\end{algorithmic}
+\end{algorithm}
+
+En pocas palabras, un proceso primero pide permiso para entrar a la
+instancia y solo después se anota como participante. Entrar le asegura
+que las primitivas seguirán vivas mientras las use; anotarse le asegura
+que su id es único.
+
+Las líneas 1--6 son la \emph{conexión}: el proceso mapea el segmento y toma
+una referencia en \code{refs} con CAS, sin el mutex, porque el mutex podría
+estar destruido si el cierre ya avanzó. Si ve la puerta cerrada, se va sin
+tocar ninguna primitiva; solo después de conectarse puede usarlas. Las
+líneas 7--12 son el \emph{registro}, ya con el mutex: si la instancia
+sigue abierta, el id no se usó antes en ese rol y queda espacio, el
+proceso ocupa una casilla (línea 11); si no, se rechaza sin modificar
+nada. Las casillas no se reciclan, así que el id queda reservado durante
+toda la vida de la instancia, como pide el enunciado.
+
+La inserción y la extracción tienen la misma estructura: esperar con el
+mutex tomado, comprobar el estado, operar sobre el buffer y avisar a la
+contraparte. Se muestran en los Algoritmos~\ref{alg:put} y~\ref{alg:get}.
+
+\begin{algorithm}[H]
+\caption{Inserción (\code{sync\_put})}
+\label{alg:put}
+\footnotesize
+\begin{algorithmic}[1]
+\STATE \code{lock}(\code{mutex})
+\WHILE{$\mathit{count}=\mathit{cap} \land \mathit{state}=\mathrm{OPEN}$}
+  \STATE \code{wait}(\code{not\_full}, \code{mutex})
+\ENDWHILE
+\IF{$\mathit{state}\neq\mathrm{OPEN}$}
+  \STATE \code{unlock}; \textbf{return} \code{REJECTED} \COMMENT{no se acepta}
+\ENDIF
+\STATE $m.\mathit{enqueue\_seq} \gets {+}{+}\mathit{enqueue\_seq}$; $m.\mathit{time} \gets$ \code{now}()
+\STATE copiar $m$ en $\mathit{messages}[\mathit{tail}]$; avanzar $\mathit{tail}$; $\mathit{count}{+}{+}$ \COMMENT{\textbf{efecto}}
+\STATE \code{signal}(\code{not\_empty});\ \ \code{unlock}(\code{mutex})
+\STATE escribir la fila \code{PUT} del CSV \COMMENT{fuera de la región crítica}
+\end{algorithmic}
+\end{algorithm}
+
+El productor espera a que haya lugar, confirma que la instancia sigue
+abierta, deja su mensaje con un número de orden global y avisa a un
+consumidor. Recién al soltar el mutex escribe su registro en el CSV.
+
+\begin{algorithm}[H]
+\caption{Extracción (\code{sync\_get})}
+\label{alg:get}
+\footnotesize
+\begin{algorithmic}[1]
+\STATE \code{lock}(\code{mutex})
+\WHILE{$\mathit{count}=0 \land \mathit{state}=\mathrm{OPEN}$}
+  \STATE \code{wait}(\code{not\_empty}, \code{mutex})
+\ENDWHILE
+\IF{$\mathit{count}=0$}
+  \STATE \code{unlock}; \textbf{return} \code{DRAINED} \COMMENT{implica $\mathit{state}\neq\mathrm{OPEN}$}
+\ENDIF
+\STATE $d \gets {+}{+}\mathit{dequeue\_seq}$;\ \ copiar $\mathit{messages}[\mathit{head}]$ en $m$
+\STATE avanzar $\mathit{head}$; $\mathit{count}{-}{-}$ \COMMENT{\textbf{efecto}}
+\STATE registrar la latencia; \code{signal}(\code{not\_full}); \code{unlock}(\code{mutex})
+\STATE verificar la carga, escribir \code{GET} y procesar \COMMENT{fuera de la región crítica}
+\end{algorithmic}
+\end{algorithm}
+
+El consumidor hace el recorrido inverso: espera a que haya un mensaje,
+toma el más antiguo y avisa a un productor de que quedó una casilla
+libre. Si la instancia se está cerrando y ya no queda nada por extraer,
+se retira.
+
+En ambos algoritmos, las líneas 2--3 son la espera: \code{wait} suelta el mutex
+mientras el proceso duerme y lo recupera al despertar, y por eso el
+predicado se vuelve a evaluar. Las líneas 4--5 deciden la salida sin
+operar, y aquí está la única diferencia entre los dos. El productor sale
+apenas el estado deja de ser OPEN, \emph{aunque haya espacio}: el corte
+gana. El consumidor, en cambio, sigue extrayendo en CLOSING mientras
+queden mensajes, y solo devuelve \code{DRAINED} con el buffer vacío. Las
+líneas 6--7 son la operación misma: asignan la secuencia global y mueven
+el mensaje, y en ese instante el mensaje queda aceptado o extraído. La
+línea 8 avisa a la contraparte y suelta el mutex, y la 9 hace la
+escritura del CSV y el procesamiento ya fuera de la región crítica.
+
+Las secuencias, la marca de tiempo y la ocupación que necesita el CSV se
+capturan dentro de la región crítica (\code{struct op\_snapshot}) y se
+escriben después de soltar el mutex. Como \code{enqueue\_time\_ns} se toma
+bajo el mutex, el orden de las marcas coincide con el de inserción. Para
+que el corte pueda interrumpir la pausa del productor, esta no usa
+\code{nanosleep}: duerme en \code{closing} con
+\code{pthread\_cond\_timedwait} y un plazo absoluto en
+\code{CLOCK\_MONOTONIC}.
+
+\subsection{Cierre ordenado}
+
+El Algoritmo~\ref{alg:cierre} muestra el cierre completo que conduce el
+\code{finisher}, desde la solicitud hasta la liberación de los recursos.
+
+\begin{algorithm}[H]
+\caption{Cierre (\code{finisher})}
+\label{alg:cierre}
+\footnotesize
+\begin{algorithmic}[1]
+\STATE \code{instance\_attach} \COMMENT{el finalizador también cuenta en \code{refs}}
+\STATE \code{lock}(\code{mutex})
+\IF{$\mathit{state}\neq\mathrm{OPEN}$}
+  \STATE \code{unlock}; \code{detach}; \textbf{return} \code{ALREADY\_CLOSING}
+\ENDIF
+\IF{$\mathit{active\_cons}=0 \land (\mathit{active\_prod}>0 \lor \mathit{count}>0)$}
+  \STATE \code{unlock}; \code{detach}; \textbf{return} \code{NO\_CONSUMER} \COMMENT{sigue OPEN}
+\ENDIF
+\STATE $\mathit{state} \gets \mathrm{CLOSING}$ \COMMENT{\textbf{punto de corte}}
+\STATE $\mathit{refs} \gets \mathit{refs} \mathbin{|} \mathrm{GATE\_CLOSED}$
+\STATE capturar $(\mathit{enqueue\_seq}, \mathit{dequeue\_seq}, \mathit{count}, t_0)$
+\STATE \code{broadcast} en las cuatro condvars; \code{unlock}; escribir \code{CLOSING}
+\STATE \code{lock}(\code{mutex})
+\WHILE{$(\mathit{refs} \mathbin{\&} \mathrm{MASK}) > 1$}
+  \STATE \code{wait}(\code{all\_left}, \code{mutex})
+\ENDWHILE
+\STATE $\mathit{state} \gets \mathrm{CLOSED}$;\ \ capturar activos y marca;\ \ \code{unlock}
+\STATE destruir mutex y condvars;\ \ \code{shm\_unlink}(\code{name})
+\STATE escribir \code{ALL\_LEFT}, \code{CLOSED} y el resumen;\ \ \code{munmap}
+\end{algorithmic}
+\end{algorithm}
+
+Dicho de forma breve: el finalizador comprueba que puede cerrar, marca el
+corte y despierta a todos, espera a que cada proceso se vaya y solo
+entonces destruye lo que queda. En detalle, el cierre tiene cuatro fases:
+\begin{itemize}
+  \item \textbf{Rechazos} (líneas 2--6): si ya hay un cierre en curso, o
+  no hay consumidor y queda trabajo, el \code{finisher} se va sin
+  cambiar nada.
+  \item \textbf{Corte} (7--10): en la misma región crítica pasa a
+  CLOSING, cierra la puerta de conexión, anota los contadores del corte y
+  despierta a todos; ya sin el mutex, registra la fila \code{CLOSING}.
+  \item \textbf{Espera de retiradas} (11--13): duerme en
+  \code{all\_left} hasta quedar como único conectado.
+  \item \textbf{Liberación} (14--16): pasa a CLOSED, destruye las
+  primitivas, elimina el nombre y escribe sus registros y el resumen.
+\end{itemize}
+El algoritmo implementa así los tres estados del enunciado. Todas las transiciones van en un solo sentido:
+OPEN pasa a CLOSING, CLOSING pasa a CLOSED, y no hay vuelta atrás. La
+precondición, el cambio de estado y el cierre de la puerta de conexión
+ocurren en una sola región crítica. Esa región tiene tres consecuencias:
+
+\begin{itemize}
+  \item \textbf{Finalizador único sin bandera extra.} La propia transición
+  es la reserva: el primer \code{finisher} la hace, y cualquier otro
+  encuentra el estado distinto de OPEN (o la puerta cerrada al conectarse)
+  y sale con ``ya hay un cierre en curso''.
+  \item \textbf{Rechazo sin efectos.} Si no hay consumidor y queda trabajo,
+  el \code{finisher} sale con error y la instancia sigue OPEN. Se puede
+  iniciar un consumidor y volver a pedir el cierre.
+  \item \textbf{Despertar a todos.} El \code{broadcast} despierta a cada
+  participante bloqueado: el productor en \code{not\_full} o en pausa sale
+  sin insertar, y el consumidor en vacío recibe \code{DRAINED}. El
+  consumidor que estaba procesando no duerme en ninguna condición: termina
+  su procesamiento y vuelve a extraer lo pendiente.
+\end{itemize}
+
+\textbf{Conexiones en curso.} Un proceso puede estar conectado pero aún
+sin registrar cuando empieza el cierre, y los contadores de activos no lo
+ven. Por eso el finalizador espera a que \code{refs} baje a~1, es decir, a
+quedar como único conectado. Como la puerta ya está cerrada, ese conjunto
+solo puede decrecer; cada salida avisa en \code{all\_left} bajo el mutex,
+y quien no alcanzó a registrarse recibe \code{REG\_NOT\_OPEN} y se
+desconecta. Quien llega con la puerta cerrada no toca ninguna primitiva.
+
+\subsection{Invariantes y puntos de efecto}
+\label{sec:invariantes}
+
+Con el mutex libre se cumplen siempre los siguientes invariantes,
+numerados para citarlos más adelante:
+\begin{enumerate}
+  \item[I1.] $0 \le \mathit{count} \le \mathit{cap}$, y $\mathit{tail}
+  \equiv \mathit{head} + \mathit{count} \pmod{\mathit{cap}}$.
+  \item[I2.] $\mathit{enqueue\_seq} = \mathit{dequeue\_seq} +
+  \mathit{count}$, es decir, aceptados $=$ extraídos $+$ pendientes. Al
+  completar el cierre, $\mathit{count}=0$ y aceptados $=$ extraídos.
+  \item[I3.] Los mensajes del buffer, de \code{head} a \code{tail}, tienen
+  \code{enqueue\_seq} consecutivos desde $\mathit{dequeue\_seq}+1$. Por
+  tanto, la $k$-ésima extracción entrega el mensaje con
+  $\mathit{enqueue\_seq}=k$. Esto es FIFO, y es lo que verifica
+  \code{verify}.
+  \item[I4.] El estado solo avanza. Después del corte,
+  $\mathit{enqueue\_seq}$ y las tablas de registro ya no crecen.
+  \item[I5.] Con la puerta cerrada, la cantidad de conexiones no aumenta.
+  Las primitivas se destruyen solo cuando el finalizador es el único
+  conectado y tiene el mutex.
+  \item[I6.] En el corte hay al menos un consumidor activo, o bien no
+  quedan productores ni mensajes. Por tanto, lo aceptado siempre puede
+  drenarse.
+\end{enumerate}
+
+Cada operación toma efecto en un único punto, marcado en los algoritmos:
+la \textbf{inserción}, al incrementar \code{enqueue\_seq} y copiar a
+\code{messages[tail]}; la \textbf{extracción}, al incrementar
+\code{dequeue\_seq} y avanzar \code{head}; el \textbf{registro}, al ocupar
+la casilla; el \textbf{cierre}, al escribir
+$\mathit{state}=\mathrm{CLOSING}$. Todos ocurren bajo el mutex, salvo la
+\textbf{conexión}, que toma efecto con el CAS exitoso sobre \code{refs}.
+
+Como la inserción comprueba el estado bajo el mismo mutex justo antes de
+su punto de efecto, toda inserción concurrente con el cierre queda
+completamente antes del corte (aceptada, con su \code{enqueue\_seq}) o
+completamente después (rechazada). Si el cierre llega justo cuando un
+productor acaba de obtener espacio, decide quién toma primero el mutex;
+no existe un estado intermedio.
+
+\subsection{Ausencia de deadlock}
+
+Hay un solo mutex. Siempre se toma y se suelta en la misma función, sin
+anidar, así que no puede haber espera circular entre bloqueos.
+\code{pthread\_cond\_wait} suelta el mutex de forma atómica al dormir, de
+modo que nadie espera espacio o datos reteniendo el bloqueo que necesita
+quien puede darlos.
+
+Queda por ver que cada espera termina, suponiendo participantes que
+cooperan y una planificación que les permite avanzar:
+\begin{itemize}
+  \item \textbf{En OPEN.} Un productor bloqueado por espacio despierta con
+  la próxima extracción, y un consumidor bloqueado por datos con la
+  próxima inserción. Si falta la contraparte, la espera es legítima y no
+  un deadlock.
+  \item \textbf{En CLOSING.} Los productores salen por el corte. Como no
+  entran más mensajes, al buffer le quedan a lo sumo $\mathit{count}$
+  extracciones, y siempre hay un consumidor para hacerlas: el finalizador
+  solo corta si existe al menos uno o si no queda nada por drenar
+  (invariante I6). Vaciado el buffer, todos reciben \code{DRAINED}. Las conexiones sin
+  registro salen por \code{REG\_NOT\_OPEN}. Así, \code{refs} llega a~1 y
+  el finalizador termina.
+\end{itemize}
+
+\subsection{Qué garantiza el algoritmo y qué el sistema}
+
+\textbf{Del algoritmo:} la exclusión mutua bien usada, FIFO (invariante I3),
+la conservación (invariante I2), la atomicidad del corte y el finalizador único.
+
+\textbf{De POSIX y el sistema operativo:} que un mutex y una condvar con
+\code{PTHREAD\_PROCESS\_SHARED} funcionen entre espacios de direcciones
+distintos (en Linux, sobre \emph{futex}), la atomicidad de \code{shm\_open}
+con \code{O\_EXCL}, que el objeto viva hasta el último \code{munmap} y el
+reloj monotónico.
+
+\textbf{Del modelo de memoria de C11:} el orden \emph{release}/\emph{acquire}
+de la publicación, y que los atómicos sin candado interno sean coherentes
+entre procesos.
+
+El progreso de un proceso concreto depende además del planificador:
+pthreads no promete equidad. Un consumidor puede ``robar'' el mensaje que
+se señaló a otro; no se pierde nada, y el enunciado no exige reparto
+equitativo.

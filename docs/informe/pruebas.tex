@@ -1,4 +1,179 @@
 \section{Pruebas y verificación}
 \label{sec:pruebas}
 
-\pendiente{Isaac, \#26: Tabla de los 13 casos mínimos (comando, esperado, obtenido, conclusión) a partir de \code{tabla\_pruebas.md}. Verificación automática de mensajes con \code{verify} (D16). Mutaciones detectadas. Sanitizers (\code{make test-san}) y la nota de lo que no demuestran (criterio 3 del \#23, D35). Limitaciones del entorno.}
+\subsection{Entorno y forma de las pruebas}
+
+\code{make test} corre 205 casos y falla ante cualquier error: 24 son las
+pruebas mínimas del enunciado (Tabla~\ref{tab:pruebas}) y el resto se
+agregó durante el desarrollo. Cada prueba tiene un tiempo límite para que un
+bloqueo indefinido se reporte como falla en vez de colgar la suite; ningún
+proceso del sistema termina por tiempo, sino por el protocolo de cierre.
+
+La corrida de referencia se hizo en un contenedor Ubuntu~24.04 (Linux
+x86-64, GCC~13.3.0, glibc~2.39) con las banderas \code{-std=c17 -Wall
+-Wextra -Wpedantic -Werror -pthread}. El resultado fue 205/205 en unos
+13~s.
+
+% La tabla de ancho completo se define acá para que LaTeX la ubique al
+% inicio de la página siguiente, antes del texto que la presenta.
+\begin{table*}[!t]
+\centering
+\caption{Pruebas mínimas: comando, resultado esperado, resultado obtenido y conclusión}
+\label{tab:pruebas}
+\scriptsize
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.9cm}>{\raggedright\arraybackslash}p{3.05cm}>{\raggedright\arraybackslash}p{2.75cm}>{\raggedright\arraybackslash}p{4.85cm}>{\raggedright\arraybackslash}p{3.35cm}@{}}
+\toprule
+Comando & Caso & Esperado & Obtenido & Conclusión \\
+\midrule
+\multirow{3}{*}{\code{build/test\_validation}} & Validación: argumentos inválidos, id duplicado, instancia inexistente & Error claro, sin efectos &
+  Código 1 y mensaje en \code{stderr}; no se crea instancia ni log; la
+  ejecución viva pasa \code{verify} &
+  Se valida todo antes de crear recursos o tocar el registro \\
+\midrule
+\multirow{14}{*}{\code{build/test\_concurrency}} & FIFO básico: 1P + 1C, capacidad 8, 1000 mensajes & Mismas identidades y cargas, en orden &
+  \code{verify}: 3\,009 filas sin violaciones &
+  El orden lo fija \code{enqueue\_seq}, asignado bajo el mutex \\
+ & Concurrencia: 4P + 4C, capacidad 8, 1000 por productor & Sin pérdidas ni duplicados &
+  4\,000 aceptados $=$ 4\,000 extraídos; \code{verify} sin violaciones &
+  Un solo mutex serializa \code{put} y \code{get}: ninguna operación se pierde \\
+ & Capacidad mínima: 4P + 4C, capacidad 1 & Progreso y conservación &
+  Termina en plazo; 4\,000 mensajes; \code{verify} sin violaciones &
+  Cada operación despierta a la contraparte, así que productores y consumidores se alternan sin trabarse \\
+ & Estrés: 32P + 32C, sin pausas, 1000 por productor & Sin pérdidas, deadlock ni errores de memoria &
+  \code{verify}: 96\,164 filas sin violaciones; sin reportes de ASan ni
+  UBSan &
+  Las garantías se mantienen con el máximo de procesos \\
+\midrule
+\multirow{5}{*}{\code{build/test\_blocking}} & Buffer lleno: productores sin consumidores & Bloqueo y reanudación &
+  Estado \code{S} y $\le 2$ \emph{ticks} de CPU en 600~ms; con un consumidor, 40/40 &
+  Duermen en \code{cond\_wait}, no en un ciclo de sondeo \\
+ & Buffer vacío: consumidores sin productores & Espera bloqueante y avance &
+  Estado \code{S} sin consumir CPU; con un productor, 20/20 &
+  Cada \code{put} despierta a un consumidor con \code{signal} \\
+\midrule
+\multirow{13}{*}{\code{build/test\_closing}} & Cierre durante actividad: capacidades 1 y 4 & Drenar, retirar y liberar &
+  Pendientes $>0$ al corte; todos salen con 0; \code{verify} sin
+  violaciones; nombre liberado &
+  El corte separa aceptados de rechazados y el consumidor drena en CLOSING \\
+ & Cierre en vacío: consumidores dormidos; sin trabajadores & Todos despiertan y terminan &
+  Salen con 0 en $<2$~s; sin trabajadores, \code{CLOSED} y nombre
+  reutilizable &
+  El \code{broadcast} del corte despierta a todos los que esperan \\
+ & Cierre sin consumidor: productor activo o datos pendientes & Rechazar sin dejar OPEN; luego cerrar &
+  \code{finisher} sale con 1 y la instancia no cambia; con un consumidor,
+  cierra y \code{verify} sin violaciones &
+  La precondición se evalúa sin cambiar el estado \\
+ & Carreras de ciclo de vida: llegadas durante el cierre, 4 finalizadores & Sin recursos destruidos ni doble destrucción &
+  Quien llega al cierre sale con 1 sin insertar ni extraer; en 10 rondas
+  gana un solo \code{finisher} &
+  La puerta en \code{refs} y la transición única de estado \\
+\midrule
+\multirow{4}{*}{\code{build/test\_isolation}} & Aislamiento y reutilización: dos nombres, duplicado, recreación & Sin interferencias ni reinicialización &
+  Cerrar una instancia no afecta a la otra; de 8 \code{creator}
+  simultáneos gana uno; tres vidas del mismo nombre &
+  Cada instancia es su propio segmento; \code{O\_EXCL} da la exclusividad \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Verificación automática de mensajes}
+
+Cada proceso escribe su propio CSV de 13 columnas: rol, id, evento, marca
+monotónica, identidad del mensaje (\code{producer\_id}, \code{sequence}),
+\code{enqueue\_seq}, \code{dequeue\_seq}, \code{enqueue\_time\_ns},
+ocupación, \emph{checksum}, validez de la carga y un detalle. Por eso el orden
+en que se imprimen o escriben los archivos no importa. \code{verify} cruza
+los CSV de todos los roles de una corrida y termina con un código distinto
+de cero si encuentra alguna violación.
+
+Los mensajes se identifican por (\code{producer\_id}, \code{sequence}).
+\code{verify} hace cuatro chequeos:
+\begin{enumerate}
+  \item \textbf{Conservación}: cada \code{PUT} aceptado tiene exactamente
+  un \code{GET}. Detecta pérdidas, duplicados, mensajes fantasma e
+  identidades repetidas.
+  \item \textbf{Integridad}: el \emph{checksum} registrado al insertar
+  coincide con el del consumidor, y este marcó la carga como válida
+  después de recalcularla.
+  \item \textbf{FIFO}: en cada \code{GET},
+  $\mathit{enqueue\_seq}=\mathit{dequeue\_seq}$.
+  \item \textbf{Corte}: ninguna inserción tiene \code{enqueue\_seq} mayor
+  que el registrado en la fila \code{CLOSING}; esa fila cumple aceptados
+  $=$ extraídos $+$ pendientes; y al final aceptados $=$ extraídos.
+\end{enumerate}
+
+La evidencia de FIFO
+no depende del orden de los archivos, sino de las dos secuencias globales
+que se asignan bajo el mutex: \code{enqueue\_seq} al insertar y
+\code{dequeue\_seq} al extraer. Con una sola cola, el $k$-ésimo mensaje
+extraído tiene que ser el $k$-ésimo insertado (invariante I3,
+Sección~\ref{sec:invariantes}). Todas las pruebas de
+punta a punta pasan sus CSV por \code{verify}.
+
+\subsection{Casos mínimos del enunciado}
+
+La Tabla~\ref{tab:pruebas} resume los casos del enunciado; junto al nombre
+de cada caso va su configuración. La primera columna, \emph{Comando}, agrupa las filas por el binario de
+prueba que las ejecuta: cada uno corre todos sus casos y \code{make test} los ejecuta a
+todos.
+
+Todos los casos de la Tabla~\ref{tab:pruebas} cumplen lo esperado. La
+columna \emph{Conclusión} indica qué mecanismo del diseño explica cada
+resultado; en conjunto, los casos sostienen cuatro propiedades:
+\begin{itemize}
+  \item \textbf{Los mensajes llegan completos y en orden.} FIFO,
+  concurrencia, capacidad mínima y estrés muestran que no se pierde,
+  duplica ni desordena ningún mensaje, de 2 a 64 procesos y aun con una
+  sola casilla.
+  \item \textbf{La espera es bloqueante.} Con el buffer lleno o vacío, los
+  procesos quedan dormidos (estado \code{S} en \code{/proc}) y casi sin
+  consumir CPU, lo que descarta el sondeo. Se reanudan solos cuando
+  aparece la contraparte.
+  \item \textbf{El cierre es ordenado.} Se drena todo lo aceptado antes de
+  liberar, el corte despierta a todos los que esperan, y un cierre
+  rechazado por falta de consumidor deja la instancia intacta para
+  reintentar.
+  \item \textbf{El ciclo de vida es seguro.} Las entradas inválidas se
+  rechazan sin efectos, las instancias con nombres distintos son
+  independientes (la exclusividad de la creación la da \code{O\_EXCL}) y
+  ningún proceso que llega durante el cierre usa recursos destruidos.
+\end{itemize}
+
+\subsection{Sanitizers y lo que no demuestran}
+
+\code{make test-san} compila y corre la suite completa con
+AddressSanitizer y UndefinedBehaviorSanitizer
+(\code{-fsanitize=address,undefined}), configurados para que cualquier
+reporte haga fallar la corrida. Resultado: 205/205 casos sin reportes,
+incluido el caso de estrés.
+
+Este resultado no prueba que no haya carreras:
+\begin{itemize}
+  \item ASan~\cite{Serebryany2012} detecta errores de memoria, no
+  entrelazados incorrectos de valores válidos.
+  \item UBSan detecta comportamiento indefinido del lenguaje, no problemas
+  de concurrencia.
+  \item ThreadSanitizer, que sí busca carreras, instrumenta hilos de un
+  mismo proceso y no sirve para procesos separados sobre memoria
+  compartida.
+\end{itemize}
+La ausencia de carreras se sostiene en otra evidencia: los invariantes de
+la Sección~\ref{sec:protocolo}, el oráculo \code{verify} aplicado a cada
+corrida y las pruebas de intercalados (cierre durante actividad y
+carreras de ciclo de vida).
+
+\subsection{Limitaciones del entorno}
+
+\begin{itemize}
+  \item \textbf{GNU/Linux como referencia.} La suite se valida ahí. macOS
+  no implementa \code{pthread\_condattr\_setclock}, y algunas pruebas
+  usan \code{/proc} y \code{MAP\_ANONYMOUS}. En macOS el código compila,
+  pero solo sirve para desarrollo.
+  \item \textbf{Emulación.} Las corridas se hicieron sobre x86-64 emulado
+  en Apple Silicon, así que los tiempos absolutos (como los 13~s de la
+  suite) son solo orientativos.
+  \item \textbf{Caídas.} Si un participante muere sin retirarse, el
+  finalizador espera indefinidamente. El enunciado excluye ese caso.
+\end{itemize}

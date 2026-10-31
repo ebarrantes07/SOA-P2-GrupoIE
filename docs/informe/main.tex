@@ -22,7 +22,26 @@
 \input{graficas/estilo}
 \usepackage{booktabs}
 \usepackage{algorithm}
-\usepackage{algorithmic}
+\usepackage[noend]{algorithmic}
+% [H] fija tablas y algoritmos donde se escriben, entre su párrafo de
+% introducción y su explicación.
+\usepackage{float}
+% Sin esto IEEEtran estira los espacios verticales para llenar la columna
+% cuando un float [H] pasa a la siguiente, y quedan huecos grandes.
+\raggedbottom
+% Pseudocódigo en español.
+\floatname{algorithm}{Algoritmo}
+\renewcommand{\algorithmicif}{\textbf{si}}
+\renewcommand{\algorithmicthen}{\textbf{entonces}}
+\renewcommand{\algorithmicelse}{\textbf{si no}}
+\renewcommand{\algorithmicelsif}{\algorithmicelse\ \algorithmicif}
+\renewcommand{\algorithmicendif}{\textbf{fin si}}
+\renewcommand{\algorithmicwhile}{\textbf{mientras}}
+\renewcommand{\algorithmicdo}{\textbf{hacer}}
+\renewcommand{\algorithmicendwhile}{\textbf{fin mientras}}
+\renewcommand{\algorithmicrepeat}{\textbf{repetir}}
+\renewcommand{\algorithmicuntil}{\textbf{hasta}}
+\renewcommand{\algorithmiccomment}[1]{\hfill$\triangleright$~#1}
 \usepackage[breaklinks=true,hidelinks]{hyperref}
 
 % Bloque de "pendiente" bien visible en el PDF, para las secciones todavía

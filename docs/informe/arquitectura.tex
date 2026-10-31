@@ -1,4 +1,197 @@
 \section{Arquitectura y representación de memoria}
 \label{sec:arquitectura}
 
-\pendiente{Isaac, \#26: Los cinco ejecutables y sus módulos (memoria, buffer, sincronización, participantes, métricas). Figura del segmento: qué es compartido (\code{struct instance}: magic, versión, capacidad, mutex y cuatro condvars, \code{refs}, estado, índices, secuencias, tablas de participantes, métricas, \code{messages[]}) y qué es privado de cada proceso (RNG, logger, contadores locales). Nombres de recursos (un objeto \code{/dev/shm/<nombre>}; las primitivas viven dentro). Publicación sin estructuras a medias (magic con release/acquire). Valores e índices, no punteros. Tabla de propiedad de recursos (quién crea y quién destruye). Fuentes: D1, D2, D8, D9, D13, D22, D29.}
+\subsection{Ejecutables y módulos}
+
+La compilación produce los cuatro ejecutables del enunciado
+(\code{creator}, \code{producer}, \code{consumer} y \code{finisher}) y un
+quinto, \code{verify}, que cruza los CSV de una corrida
+(Sección~\ref{sec:pruebas}). Cada productor y consumidor es un proceso
+independiente que solo conoce el nombre de la instancia. El código común se
+divide en los cinco módulos que pide el enunciado y unos pocos de apoyo:
+
+\begin{itemize}
+  \item \textbf{Memoria} (\code{memory.c}): crea, valida, mapea y elimina
+  el segmento.
+  \item \textbf{Buffer} (\code{buffer.c}): arreglo circular puro, sin
+  sincronización; sus funciones exigen el mutex ya tomado.
+  \item \textbf{Sincronización} (\code{sync.c}): la única capa que toca el
+  mutex y las variables de condición; implementa \code{put}, \code{get} y
+  la pausa interrumpible.
+  \item \textbf{Participantes} (\code{participants.c}): conexión, registro,
+  retiro y máquina de estados del cierre.
+  \item \textbf{Métricas} (\code{metrics.c}): agregados de la instancia y
+  resumen del finalizador.
+  \item \textbf{Apoyo}: análisis de argumentos (\code{cli.c}), CSV
+  (\code{logger.c}), carga útil verificable (\code{payload.c}), generador
+  \emph{xorshift32}~\cite{Marsaglia2003} (\code{rng.c}) y reloj
+  monotónico (\code{clock.c}).
+\end{itemize}
+
+\subsection{Un segmento por instancia}
+
+Cada instancia es \emph{un único} objeto de memoria compartida POSIX con el
+nombre que da el usuario (por ejemplo \code{/soa\_p2\_g1}, visible en Linux
+como \code{/dev/shm/soa\_p2\_g1})~\cite{POSIX2024}. No hay semáforos con
+nombre ni archivos auxiliares: el mutex y las variables de condición viven
+\emph{dentro} del segmento, así que dos instancias con nombres distintos no
+comparten ningún recurso. El nombre debe ser \code{/} seguido de 1 a 30
+caracteres de \code{[A-Za-z0-9\_-]}.
+
+El segmento contiene un único \code{struct instance}, con el arreglo de
+mensajes como miembro flexible al final. La Fig.~\ref{fig:segmento}
+muestra su disposición con los desplazamientos medidos en x86-64 con
+glibc. La cabecera ocupa 12\,528~bytes y cada mensaje 64, así que el
+segmento mide $12\,528 + 64\cdot\mathit{capacidad}$~bytes: 13\,040 con
+capacidad 8 y unos 78~KB con 1024.
+
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[
+    font=\scriptsize, node distance=0pt,
+    campo/.style={draw, text width=5.4cm, align=center, inner xsep=2pt,
+                  inner ysep=2.5pt, fill=black!4},
+    off/.style={anchor=east, text=black!70},
+    prot/.style={anchor=west, text=black!70},
+    m/.style={draw, minimum height=0.42cm, inner sep=0pt, font=\tiny,
+              fill=black!12, anchor=north west}
+  ]
+  \node[campo] (c0) {\code{magic} $\cdot$ \code{version} $\cdot$ \code{capacity} $\cdot$ \code{state}};
+  \node[campo, below=of c0] (c1) {\code{mutex} (40 B) $+$ \code{not\_full}, \code{not\_empty},
+    \code{closing}, \code{all\_left} (48 B c/u)};
+  \node[campo, below=of c1] (c2) {\code{head}, \code{tail}, \code{count},
+    \code{enqueue\_seq}, \code{dequeue\_seq}, \code{active\_producers},
+    \code{active\_consumers}};
+  \node[campo, below=of c2] (c3) {\code{refs}: conexiones $+$ bit de puerta cerrada};
+  \node[campo, below=of c3] (c4) {\code{producers}: 64 casillas de registro de 64 B};
+  \node[campo, below=of c4] (c5) {\code{consumers}: 64 casillas de registro de 64 B};
+  \node[campo, below=of c5] (c6) {\code{metrics}: marcas de tiempo, rechazos e
+    histograma de latencia (496 cubetas)};
+  \node[campo, below=of c6, fill=black!12] (c7) {\code{messages[0..capacidad$-$1]}, 64 B c/u};
+  \foreach \i/\o/\p in {0/0/{A, I, I, M}, 1/16/primitivas, 2/248/M, 3/288/A,
+                        4/296/M, 5/4\,400/M, 6/8\,504/M, 7/12\,528/M} {
+    \node[off]  at (c\i.west) {\o\ };
+    \node[prot] at (c\i.east) {\ \p};
+  }
+  \node[font=\scriptsize\bfseries, anchor=south east] at (c0.north west) {offset};
+  \node[font=\scriptsize\bfseries, anchor=south west] at (c0.north east) {protec.};
+
+  % Detalle de un mensaje (no a escala)
+  \coordinate (m0) at ($(c7.south west)+(0,-0.45)$);
+  \node[m, minimum width=0.72cm] (m1) at (m0) {\code{prod\_id}};
+  \node[m, minimum width=0.55cm] (m2) at (m1.north east) {\code{resv}};
+  \node[m, minimum width=0.85cm] (m3) at (m2.north east) {\code{sequence}};
+  \node[m, minimum width=0.85cm] (m4) at (m3.north east) {\code{enq\_seq}};
+  \node[m, minimum width=0.85cm] (m5) at (m4.north east) {\code{enq\_ns}};
+  \path let \p1=(m5.east), \p2=(c7.east) in
+    node[m, minimum width=\x2-\x1] (m6) at (m5.north east) {\code{payload} (32 B)};
+  \draw[densely dotted] (c7.south west) -- (m1.north west);
+  \draw[densely dotted] (c7.south east) -- (m6.north east);
+  \node[font=\tiny, anchor=north west, align=left, text width=5.6cm, inner xsep=0pt]
+    at ($(m1.south west)+(0,-0.05)$)
+    {\raggedright payload: \code{sequence} y \code{producer\_id} (copias),
+     \code{checksum} \mbox{FNV-1a} y \code{fill[16]}};
+\end{tikzpicture}
+\caption{Disposición de \code{struct instance} en el segmento (x86-64, glibc
+2.39). Protección: A = atómico, I = inmutable tras publicar, M = mutex de
+la instancia. Abajo, el detalle de un mensaje de 64~B (no a escala).}
+\label{fig:segmento}
+\end{figure}
+
+\subsection{Datos compartidos y datos privados}
+
+Todo lo que dos procesos necesitan ver igual está en el segmento: el estado
+de la instancia, las primitivas, los índices y contadores del buffer, las
+tablas de registro de por vida y los agregados para el resumen final.
+
+Cada proceso guarda en su memoria privada la \emph{dirección} donde mapeó
+el segmento (en general distinta entre procesos), el estado de su
+generador pseudoaleatorio sembrado una vez con \code{--seed}, su
+\code{FILE*} de CSV, sus contadores de espera y adquisición (que copia a su
+casilla de registro al retirarse) y el mensaje que construye o procesa.
+Así, el procesamiento simulado y la escritura del CSV no necesitan el
+mutex.
+
+Ningún campo compartido contiene punteros: el buffer usa los índices
+\code{head} y \code{tail} módulo la capacidad sobre \code{messages[]}, y
+los mensajes son valores de tamaño fijo que se copian con
+\code{buffer\_push} y \code{buffer\_pop}. La carga útil es verificable sin
+estado extra: $\mathit{fill}[i] = (\mathit{producer\_id} +
+\mathit{sequence} + i) \bmod 256$, y un \emph{checksum} FNV-1a de
+32~bits~\cite{FNV} sobre la serialización campo por campo de
+\code{sequence}, \code{producer\_id} y \code{fill}. El consumidor la
+recalcula al extraer y anota el resultado en su CSV.
+Los atómicos del segmento (\code{magic} y \code{refs}) solo son válidos
+entre procesos si no usan un candado interno, lo que se exige en tiempo de
+compilación con \code{ATOMIC\_INT\_LOCK\_FREE == 2}.
+
+\subsection{Creación exclusiva y publicación}
+
+El \code{creator} sigue un orden fijo:
+\begin{enumerate}
+  \item valida el nombre y la capacidad;
+  \item llama a \code{shm\_open} con \code{O\_CREAT|O\_EXCL};
+  \item ajusta el tamaño con \code{ftruncate}, reintentando ante
+  \code{EINTR};
+  \item mapea el segmento con \code{mmap};
+  \item inicializa las primitivas con \code{PTHREAD\_PROCESS\_SHARED} y las
+  variables de condición con \code{CLOCK\_MONOTONIC};
+  \item escribe \code{version}, \code{capacity} y \code{state = OPEN};
+  \item por último, escribe \code{magic} con \emph{release}.
+\end{enumerate}
+
+\code{O\_EXCL} hace la creación atómica: entre varios \code{creator}
+simultáneos gana uno, y los demás reciben \code{EEXIST} y salen
+\emph{sin tocar} el segmento ajeno. Si falla un paso posterior, el
+\code{creator} deshace solo lo que creó: destruye las primitivas
+inicializadas, desmapea y hace \code{shm\_unlink} del nombre que acaba de
+reservar.
+
+Quien se conecta lee \code{magic} con \emph{acquire} y rechaza un
+segmento más chico que la cabecera, un \code{magic} distinto de la
+constante (\code{creator} sin terminar o segmento ajeno) y una versión,
+capacidad o tamaño incompatibles. El par \emph{release}/\emph{acquire} garantiza que quien observa
+\code{magic} observa también todo lo escrito antes. Como el kernel entrega
+el segmento en ceros y la constante es distinta de cero, una instancia a
+medio crear nunca parece lista.
+
+Un mutex no puede proteger esta publicación: quien llega no sabe todavía
+si el mutex está inicializado.
+
+\subsection{Propiedad de los recursos}
+
+Cada recurso de una instancia tiene un único responsable de crearlo y
+otro de liberarlo, y esa asignación es la que evita fugas y dobles
+destrucciones. La Tabla~\ref{tab:propiedad} la resume; el detalle de qué
+campo protege cada mecanismo está en \code{include/memory.h}.
+
+\begin{table}[H]
+\centering
+\caption{Propiedad de los recursos de una instancia}
+\label{tab:propiedad}
+\footnotesize
+\begin{tabular}{@{}p{2.3cm}p{2.5cm}p{2.9cm}@{}}
+\toprule
+Recurso & Crea & Libera \\
+\midrule
+Nombre del segmento & \code{creator} (\code{O\_EXCL}) & \code{finisher} (\code{shm\_unlink}) \\
+Objeto de memoria & \code{creator} (\code{ftruncate}) & el kernel, al último \code{munmap} \\
+Mapeo de un proceso & ese proceso (\code{mmap}) & ese proceso (\code{munmap}) \\
+Mutex y condvars & \code{creator}, antes de publicar & \code{finisher}, con $\mathit{refs}=1$ \\
+Referencia de conexión & \code{instance\_attach} & \code{instance\_detach} \\
+Casilla de registro & \code{participant\_\allowbreak register} & nunca: queda \code{LEFT} \\
+CSV de cada proceso & ese proceso & ese proceso \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Casi todos los recursos los crea el \code{creator} o el propio proceso que
+los usa, y los libera el \code{finisher} o ese mismo proceso. Hay dos
+excepciones. El objeto de memoria no lo libera nadie del programa: el
+\code{finisher} solo elimina el \emph{nombre}, y el kernel libera el
+objeto cuando el último proceso lo desmapea. Esa propiedad vuelve seguro
+el rechazo de una conexión tardía (Sección~\ref{sec:protocolo}). La
+casilla de registro, por su parte, no se libera nunca: queda marcada como
+retirada para que su id no pueda volver a usarse. Las primitivas se
+destruyen solo cuando el \code{finisher} es el único conectado
+($\mathit{refs}=1$).
