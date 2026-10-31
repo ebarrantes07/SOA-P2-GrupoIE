@@ -35,6 +35,35 @@ una corrida con pérdidas daría números que no significan nada.
 | Compilador | GCC 13.3.0 (`-std=c17 -O0` implícito, sin `-O`), GNU Make 4.3 |
 | Biblioteca C | glibc 2.39 |
 | Reloj | `CLOCK_MONOTONIC` para todas las marcas de tiempo |
+| Commit medido | `6720836` (merge del #54, cierre de la verificación contra el enunciado) |
+
+Sobre el commit: después de la medición, la revisión del #19 cambió
+`csv_logger_open` para tomar un candado de escritura antes de truncar, en vez de
+truncar a ciegas (D32). Son cinco archivos: `src/logger.c`, `include/logger.h` y
+la misma línea de mensaje de error en los tres ejecutables que abren un CSV. El
+experimento **no se volvió a correr**, y no hace falta, por tres razones
+comprobables:
+
+- Los módulos del camino por mensaje —`sync.c`, `buffer.c`, `participants.c`,
+  `metrics.c`, `payload.c`, `memory.c`— son idénticos byte a byte entre `6720836`
+  y el código entregado, igual que el cuerpo de `csv_logger_write` y que
+  `scripts/experimento.py`.
+- El cambio queda **fuera de la ventana de medición**: el throughput se mide entre
+  `metrics.first_start_ns`, que se fija en `participant_register`, y la última
+  extracción; `csv_logger_open` corre antes de `instance_attach` y del registro en
+  los tres ejecutables.
+- Medido con las dos versiones compiladas (2000 aperturas, 7 repeticiones
+  alternadas): 114.08 ± 5.93 µs el commit medido contra 113.16 ± 4.34 µs el
+  entregado, o sea −0.92 µs (0.33 errores estándar), que no es una diferencia. En
+  la cota pesimista —si la apertura entera fuese costo nuevo— 9 procesos × 113 µs
+  = 1.0 ms, un 0.09 % de una corrida de 1.1 s, un orden de magnitud por debajo de
+  la desviación entre repeticiones.
+
+El único efecto de comportamiento del cambio, devolver `EBUSY` donde antes se
+truncaba, es inalcanzable desde el experimento: `experimento.py` le da a cada
+proceso su propia ruta (`p1.csv`…`p4.csv`, `c1.csv`…`c4.csv`, `finisher.csv`)
+dentro de un directorio por corrida, así que dos procesos nunca comparten
+archivo y el candado nunca choca.
 
 Tres cosas de este entorno afectan la lectura de los números y conviene decirlas
 antes de los resultados:
