@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Graficas del experimento (Issue #25, decisiones en D32).
+"""Graficas del experimento (Issue #25, decisiones en D33).
 
 Lee results/seleccionados/agregados.csv (lo escribe scripts/analisis.py) y
 deja tres figuras SVG en la misma carpeta:
@@ -13,7 +13,7 @@ deja tres figuras SVG en la misma carpeta:
 
 SVG a mano y sin dependencias: el README declara que los scripts usan solo
 la biblioteca estandar, y una figura para un informe impreso no necesita
-nada mas. Las decisiones de forma y color estan en D32.
+nada mas. Las decisiones de forma y color estan en D33.
 """
 import argparse
 import csv

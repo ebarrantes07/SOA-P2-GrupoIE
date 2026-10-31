@@ -5,7 +5,7 @@ están en `results/seleccionados/`: el manifiesto de las corridas, los 45 resúm
 del finisher, los agregados y las tres figuras. El modelo de referencia con el que se
 separa el régimen de la implementación (sección 5) es `scripts/modelo.py`. Las
 decisiones metodológicas están en `docs/decisiones_diseno.md` (D27 el experimento,
-D32 este análisis).
+D33 este análisis).
 
 ## 1. Qué se midió
 

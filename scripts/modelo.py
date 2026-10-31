@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Modelo de referencia del productor-consumidor (Issue #25, decisiones en D32).
+"""Modelo de referencia del productor-consumidor (Issue #25, decisiones en D33).
 
 Simulacion de eventos discretos de lo que miden las tres figuras: 4+4
 procesos, pausas exponenciales, buffer de capacidad C. El modelo tiene

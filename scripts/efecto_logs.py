@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Efecto de los logs sobre la medicion (Issue #25, criterio 4; ver D32).
+"""Efecto de los logs sobre la medicion (Issue #25, criterio 4; ver D33).
 
 El enunciado pide documentar cuanto distorsiona la propia instrumentacion
 lo que se esta midiendo. Se mide con un A/B: la misma corrida con los CSV

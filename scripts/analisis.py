@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analisis del experimento (Issue #25, decisiones en D32).
+"""Analisis del experimento (Issue #25, decisiones en D33).
 
 Lee results/manifiesto.csv y el resumen de cada corrida, agrega las 5
 repeticiones de cada combinacion (media y desviacion estandar) y escribe
