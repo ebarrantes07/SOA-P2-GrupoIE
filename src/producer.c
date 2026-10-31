@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
     struct csv_logger lg;
     int rc = csv_logger_open(&lg, opt.log_path, CSV_PRODUCER, opt.id);
     if (rc != 0) {
-        fprintf(stderr, "producer: no se pudo abrir %s: %s\n", opt.log_path, strerror(-rc));
+        fprintf(stderr, "producer: no se pudo abrir %s: %s\n", opt.log_path, csv_logger_open_str(rc));
         return EXIT_FAILURE;
     }
 

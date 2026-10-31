@@ -1427,7 +1427,9 @@ se rechaza con `-EINVAL` sin escribir nada.
   `fwrite`, así una fila nunca queda partida entre dos escrituras.
 
 **Archivo:** `csv_logger_open` crea o trunca el archivo y escribe la
-cabecera; si falla, no queda nada abierto. Se usa el buffer de `stdio`
+cabecera; si falla, no queda nada abierto. Desde D32 trunca solo después
+de tomar un candado de escritura: si otro proceso vivo escribe ese
+archivo, devuelve `-EBUSY` sin tocarlo. Se usa el buffer de `stdio`
 (no se vacía en cada fila) para que el log cueste lo menos posible durante
 la corrida; `csv_logger_close` vacía y cierra, y reporta el error de una
 escritura diferida, que con buffer aparece recién ahí. El enunciado no
@@ -2780,3 +2782,116 @@ proceso por plazo y después lanza el finisher, la corrida se estanca.
 - el finisher corre con `timeout=120`, así que en el peor caso (un
   participante que se cae por su cuenta mientras el cierre está en curso) la
   corrida se marca `invalida` en vez de colgar el experimento.
+
+---
+
+## D32 — Pruebas de validación y aislamiento; el log no se trunca a otro proceso
+
+- **Fecha:** 2026-10-28
+- **Issue:** [#19](https://github.com/ebarrantes07/SOA-P2-GrupoIE/issues/19)
+- **Quién decide:** Isaac · **Revisa:** Emmanuel
+- **Numeración:** D32 porque D30 (Issue #20, PR #55) y D31 (Issue #50,
+  PR #56) se abrieron antes.
+
+### Contexto
+
+El issue pide dos casos de la tabla de pruebas mínimas dentro de
+`make test`: "Validación" (argumentos ausentes, capacidad 0, no
+numéricos, fuera de rango, id duplicado, instancia inexistente, con error
+claro y sin corromper otra ejecución) y "Aislamiento y reutilización" (dos
+nombres sin interferencia, creación duplicada rechazada, recreación tras
+el cierre). Al escribir el caso del id duplicado apareció una falla real.
+
+### La falla
+
+`csv_logger_open` abría con `fopen(path, "w")`, que trunca al abrir, y
+productor, consumidor y finisher abren el log **antes** de conectarse y
+registrarse (D23, para que los rechazos también queden en el CSV). Un
+proceso con id duplicado y el mismo `--log` que uno en curso era
+rechazado, pero antes le vaciaba el archivo al otro. Ese otro seguía
+escribiendo en su posición anterior, y el archivo quedaba con un hueco de
+bytes nulos. Reproducido en Docker: consumidor en curso con 3000 mensajes,
+duplicado rechazado con el mismo log, y el CSV final tenía 360 273 bytes
+nulos; `verify` encontró 2976 violaciones. Los mensajes se habían procesado
+bien: lo que se destruía era la evidencia de la otra ejecución. Con pocos
+mensajes no se veía, porque el consumidor aún no había vaciado su buffer
+de `stdio`.
+
+### Decisión
+
+`csv_logger_open` abre **sin truncar** (`open` con `O_WRONLY | O_CREAT`),
+toma un candado de escritura de todo el archivo con `fcntl(F_SETLK)` sin
+esperar, y solo con el candado trunca (`ftruncate`) y escribe la cabecera.
+Si otro proceso tiene el candado, devuelve `-EBUSY` sin modificar el
+archivo y
+el ejecutable termina con código 1 y el mensaje *"otro proceso en
+ejecucion ya escribe en ese archivo"* (`csv_logger_open_str`). El candado
+se suelta al cerrar el archivo o al morir el proceso, así que un proceso
+que muere no deja el log bloqueado.
+
+Alternativas descartadas:
+
+- **Abrir el log después de registrarse:** pierde las filas de rechazo
+  de D23, y no evita que dos procesos válidos (ids distintos) compartan el
+  mismo log y lo intercalen. El candado cubre los dos casos.
+- **`O_EXCL`:** impediría reusar la ruta en una corrida nueva, que es lo
+  normal en el experimento y en el protocolo del README.
+
+Los candados de `fcntl` son por proceso: dos aperturas del mismo archivo
+dentro de un mismo proceso no se excluyen. Eso no pasa en los ejecutables
+(cada uno abre un solo log).
+
+**Solo archivos regulares.** Con `fstat` se mira qué se abrió, y el
+candado y el truncado se aplican solo si es un archivo regular
+(`S_ISREG`). Lo demás (`/dev/null`, un FIFO, una terminal) se usa tal
+cual, igual que con `fopen("w")`: no tiene contenido que proteger, no se
+puede truncar (`ftruncate` da `EINVAL` sobre un dispositivo) y `/dev/null`
+es un solo archivo para toda la máquina, así que con candado un solo
+proceso a la vez podría usar `--log /dev/null`. La primera versión de este
+cambio lo rompía; lo encontró la revisión de Emmanuel, porque
+`scripts/efecto_logs.py` (#25) usa `--log /dev/null` en 9 procesos a la
+vez como línea base para medir el efecto de los logs.
+
+**Qué deja un rechazo en el disco.** `open(..., O_CREAT)` crea el archivo
+si no existía, antes de mirar el candado. Pero un rechazo por candado
+implica que otro proceso ya tenía ese archivo abierto, o sea que existía:
+lo que se garantiza es que su contenido no cambia. Los rechazos por
+registro (id duplicado, instancia inexistente) sí escriben su CSV con la
+fila de rechazo, a propósito (D23).
+
+### Pruebas
+
+- `tests/e2e_util.h`: lanza los ejecutables reales con `fork` + `execv`,
+  con tiempo límite por proceso (`e2e_wait` mata al que no termina) y
+  `alarm(120)` global, y captura `stderr` para revisar el mensaje.
+- `tests/test_validation.c` (7 casos): argumentos ausentes en los cuatro
+  ejecutables; capacidad 0, no numérica, con signo, con basura, vacía,
+  fuera de rango y con overflow; nombres inválidos; opciones desconocidas,
+  repetidas y ajenas al rol; números inválidos de productor y consumidor
+  contra una instancia viva, comprobando que no se crea el log ni cambia
+  la instancia; instancia inexistente; e id duplicado (consumidor activo,
+  productor ya retirado y mismo log) sin cambiar la instancia, con la
+  ejecución en curso terminando bien y aprobada por `verify`.
+- `tests/test_isolation.c` (4 casos): dos instancias a la vez con los
+  mismos ids, donde cerrar una no detiene a la otra y cada juego de logs
+  pasa `verify`; creación duplicada rechazada sin tocar la existente; 8
+  `creator` compitiendo por el mismo nombre, 5 rondas, siempre gana
+  exactamente uno; y tres vidas seguidas del mismo nombre con distinta
+  capacidad, reusando los mismos ids.
+- `test_logger.c`: `open_busy_keeps_other_file`, con otro proceso
+  sosteniendo el candado, y `open_dev_null_shared`, con dos procesos
+  usando `/dev/null` a la vez.
+
+Mutaciones detectadas (en Docker): volver a `fopen("w")` en el logger,
+quitar `O_EXCL` del `shm_open` de `memory_create` (no del logger: ahí
+`O_EXCL` es la alternativa descartada de arriba), aceptar capacidad 0, no
+hacer `shm_unlink` al cerrar, aceptar el id duplicado, y considerar
+duplicado solo a los activos.
+
+Las pruebas que lanzan procesos (`e2e_util.h`) matan a los hijos que
+queden vivos al salir, también si la salida es por `SIGALRM`, `SIGINT`,
+`SIGTERM` o `SIGPIPE`, que no pasan por `atexit`. Es el mismo patrón que
+`test_concurrency.c` (D30). `test_logger.c` tiene su propio `alarm`, y el
+padre cierra los extremos de tubería que no usa, para que la muerte del
+hijo le llegue como EOF y no como una espera eterna. La suite completa
+pasa con ASan y UBSan (198 pruebas).
