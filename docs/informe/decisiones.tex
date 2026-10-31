@@ -4,8 +4,50 @@
 Las decisiones de este proyecto están registradas una por una ---con su
 contexto, las alternativas descartadas y la evidencia cuando la hubo--- en
 una bitácora versionada junto al código~\cite{Bitacora2026}. Esta sección
-discute cuatro de ellas, las que tenían una alternativa razonable que se
+discute cinco de ellas, las que tenían una alternativa razonable que se
 descartó con evidencia y no por preferencia.
+
+\subsection{Primitivas: mutex y condiciones, no semáforos}
+
+\textbf{Decisión.} Un mutex y cuatro variables de condición POSIX
+configuradas para compartirse entre procesos. El enunciado permite las dos
+vías y deja la elección al grupo, así que esta es la decisión de la que
+cuelgan las tres siguientes.
+
+\textbf{Alternativa descartada.} Semáforos POSIX compartidos entre procesos,
+que es la construcción original de Dijkstra para este problema y necesita
+menos código: dos contadores, un binario de exclusión y ningún ciclo de
+predicado.
+
+\textbf{Evidencia.} Tres razones, ninguna de preferencia.
+
+\emph{Con semáforos hay un orden que interbloquea y hay que recordar no
+escribirlo.} Dijkstra advierte que el orden de las dos \code{P} del
+consumidor es esencial (sección~\ref{sec:lecturas}): tomar primero la
+exclusión y después los datos deja al consumidor dormido \emph{con la
+exclusión en la mano}. Es justo lo que el enunciado prohíbe ---no esperar
+mientras se conserva el bloqueo que necesita quien puede satisfacer esa
+espera--- y con \code{pthread\_cond\_wait}, que suelta el mutex y lo retoma
+de forma atómica, ese error no se puede escribir.
+
+\emph{El cierre no necesita permisos falsos.} Despertar a todos los
+bloqueados es un \code{broadcast} sobre las cuatro condvars, y lo que cada
+uno reevalúa al despertar es el estado real. Por la vía de los semáforos hay
+que publicar permisos que no corresponden a ningún mensaje ni a ningún
+espacio, y el propio enunciado pide entonces distinguirlos de los reales:
+una obligación que esta decisión elimina en vez de cumplir.
+
+\emph{La contabilidad queda en una sola variable.} Un \code{count} bajo un
+mutex permite evaluar los dos predicados sobre el mismo estado; con dos
+semáforos su suma no es un invariante instantáneo mientras haya operaciones
+en curso (sección~\ref{sec:lecturas}).
+
+\textbf{Lo que costó.} Las primitivas dejan de ser objetos del sistema y
+pasan a vivir dentro del segmento, con \code{PTHREAD\_PROCESS\_SHARED} y un
+reloj explícito en las condvars; alguien tiene que crearlas y alguien
+destruirlas, que es de donde sale el protocolo de cierre con finalizador
+único. Un semáforo con nombre lo habría resuelto el sistema operativo. Ese
+es el precio que el proyecto paga por las tres razones de arriba.
 
 \subsection{Tamaño del buffer: no hay un valor por omisión razonable}
 

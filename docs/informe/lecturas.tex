@@ -59,7 +59,8 @@ productor podría entrar a producirlos. El interbloqueo no está en ninguna de
 las dos operaciones, está en su orden.
 
 Con mutex y variable de condición ese error es estructuralmente imposible, y
-esa es la ventaja conceptual que justifica la elección del enunciado.
+esa es la ventaja conceptual que justifica nuestra elección
+(sección~\ref{sec:decisiones}).
 \code{pthread\_cond\_wait} suelta el mutex y lo vuelve a tomar de forma
 atómica~\cite{POSIX2024}, así que esperar \emph{dentro} de la región crítica
 no retiene nada: el productor bloqueado en \code{not\_full} dentro de
