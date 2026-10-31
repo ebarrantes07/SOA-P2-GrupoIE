@@ -159,8 +159,9 @@ que varias comodidades de su modelo no se heredan:
 \item \textbf{Nadie limpia por uno.} Un hilo que muere se lleva su pila; un
       proceso que muere deja su referencia tomada y el segmento con nombre
       en el sistema. Un participante registrado que no se retira cuelga el
-      cierre ---el finalizador se queda esperando en \code{all\_left} y
-      agota su plazo---, y el objeto de \code{/dev/shm} sobrevive a todos
+      cierre ---el finalizador se queda esperando en \code{all\_left}, sin
+      plazo que lo libere---, y el objeto de \code{/dev/shm} sobrevive a
+      todos
       los procesos: hay que borrarlo a mano. Es un límite asumido ---el
       enunciado no pide recuperación ante caídas--- y documentado como tal,
       no un defecto encontrado tarde.
