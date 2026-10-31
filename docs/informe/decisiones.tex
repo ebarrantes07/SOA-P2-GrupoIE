@@ -7,25 +7,27 @@ una bitácora versionada junto al código~\cite{Bitacora2026}. Esta sección
 discute cuatro de ellas, las que tenían una alternativa razonable que se
 descartó con evidencia y no por preferencia.
 
-\subsection{Tamaño del buffer: se mide, no se elige grande}
+\subsection{Tamaño del buffer: no hay un valor por omisión razonable}
 
-\textbf{Decisión.} La capacidad es un parámetro de la instancia
-(\code{--capacity}) y el experimento la barre en 1, 8 y 64 en vez de fijar
-un valor «suficientemente grande».
+\textbf{Decisión.} \code{--capacity} es obligatoria y no tiene valor por
+omisión: \code{creator} se niega a crear la instancia si no se la dan.
 
-\textbf{Alternativa descartada.} Elegir una capacidad holgada de entrada,
-con el argumento intuitivo de que más espacio nunca estorba.
+\textbf{Alternativa descartada.} Darle un valor por omisión cómodo ---8,
+digamos--- para poder invocar \code{creator} sin pensar en la capacidad, que
+es lo que haría cualquiera que asuma que más espacio nunca estorba.
 
-\textbf{Evidencia.} Estorba, y se puede cuantificar
-(sección~\ref{sec:resultados}): subirla solo mejora el throughput cuando
-ninguno de los dos lados es el cuello de botella (+18\,\% en 5/5~ms, plano
-en 2/8~ms), mientras que la latencia sube siempre, hasta un factor de 66. En
-régimen saturado la latencia ni siquiera es una medición: es la capacidad
-dividida por la tasa de drenaje.
+\textbf{Evidencia.} Ese valor cómodo no existe
+(sección~\ref{sec:resultados}): subir la capacidad solo mejora el throughput
+cuando ninguno de los dos lados es el cuello de botella (+18\,\% en 5/5~ms,
+plano en 2/8~ms), mientras que la latencia sube siempre, hasta un factor de
+66. En régimen saturado la latencia ni siquiera es una medición: es la
+capacidad dividida por la tasa de drenaje. Cualquier valor por omisión
+habría sido bueno para una de las dos métricas y malo para la otra, y el
+programa no tiene forma de saber cuál le importa a quien lo corre.
 
 \textbf{Consecuencia práctica.} Elegir la capacidad es elegir un punto en un
-intercambio entre caudal y latencia, no una mejora gratuita, y el punto
-conveniente depende de para qué sirva el sistema. Una simulación de eventos
+intercambio entre caudal y latencia, no una mejora gratuita, así que el
+programa obliga a elegirlo de forma explícita. Una simulación de eventos
 discretos del mismo escenario, sin mutex ni registro
 (\code{scripts/modelo.py}), agrega que el beneficio satura en seco: de
 capacidad~128 en adelante el throughput no gana nada, así que el 64 del
